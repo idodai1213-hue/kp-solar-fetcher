@@ -52,16 +52,15 @@ jobs:
           KP_PASSWORD: ${{ secrets.KP_PASSWORD }}
         run: python kp_solar_fetcher.py
 
-      - name: Upload updated Excel to OneDrive
-        run: |
-          # 更新されたExcelをOneDriveの ドキュメント フォルダへ上書きアップロード
-          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/"
-
       - name: Commit and push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add path/to/your_file.xlsx
+          git add ./太陽光発電システム_2026年.xlsx
           git diff --quiet && git diff --staged --quiet || git commit -m "Update Excel file"
           git push
-          
+
+      - name: Upload updated Excel to OneDrive
+        run: |
+          # 更新されたExcelをOneDriveの ドキュメント フォルダへ上書きアップロード
+          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/"
