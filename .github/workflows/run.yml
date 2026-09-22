@@ -42,10 +42,15 @@ jobs:
 
       - name: Download Excel from OneDrive
         run: |
-          echo "=== OneDriveからExcelをダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/太陽光発電システム_2026年.xlsx" ./ -v
+          echo "=== 古いローカルExcelの削除 ==="
+          rm -f ./太陽光発電システム_2026年.xlsx
+          
+          echo "=== OneDriveからExcelを強制ダウンロード開始 ==="
+          # 「ドキュメント」または「Documents」のどちらかから取得
+          rclone copy "onedrive:Documents/太陽光発電システム_2026年.xlsx" ./ -v || rclone copy "onedrive:ドキュメント/太陽光発電システム_2026年.xlsx" ./ -v
+          
           echo "=== ダウンロード後のローカルファイル確認 ==="
-          ls -la
+          ls -la 太陽光発電システム_2026年.xlsx
 
       - name: Run Solar Fetcher & Excel Update
         env:
@@ -56,4 +61,4 @@ jobs:
       - name: Upload updated Excel to OneDrive
         run: |
           echo "=== 更新されたExcelをOneDriveへアップロード開始 ==="
-          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/" -v
+          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:Documents/" -v || rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/" -v
