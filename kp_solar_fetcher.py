@@ -1,5 +1,8 @@
 import os
+import glob
 import time
+import pandas as pd
+from openpyxl import load_workbook
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -14,22 +17,74 @@ USER_ID = os.getenv("KP_USER_ID")
 PASSWORD = os.getenv("KP_PASSWORD")
 
 DOWNLOAD_DIR = os.path.abspath("./downloads")
+EXCEL_PATH = os.path.abspath("./太陽光発電システム_2026年.xlsx")
+SHEET_NAME = "パワコン"
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+def update_excel_with_csv(csv_path):
+    """ダウンロードしたCSVのデータをExcelのパワコンシートに追記更新する"""
+    print(f"CSVデータの処理を開始します: {csv_path}")
+    
+    # 文字コード判別（Shift-JISまたはUTF-8）
+    try:
+        df_csv = pd.read_csv(csv_path, encoding="shift_jis")
+    except UnicodeDecodeError:
+        df_csv = pd.read_csv(csv_path, encoding="utf-8")
+
+    # CSVが空でないか確認
+    if df_csv.empty:
+        print("CSVファイルにデータが含まれていませんでした。")
+        return
+
+    # Excelファイルが存在するか確認
+    if not os.path.exists(EXCEL_PATH):
+        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
+        return
+
+    wb = load_workbook(EXCEL_PATH)
+    if SHEET_NAME not in wb.sheetnames:
+        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。")
+        return
+    
+    ws = wb[SHEET_NAME]
+
+    # 既存データの (年月日, 時刻) 鍵集合を作成（A列=1, B列=2）
+    existing_keys = set()
+    for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+        if row[0] is not None and row[1] is not None:
+            existing_keys.add((str(row[0]).strip(), str(row[1]).strip()))
+
+    # CSVから新規データのみ抽出（A列=0番目, B列=1番目と仮定）
+    new_rows_count = 0
+    for idx, row in df_csv.iterrows():
+        date_val = str(row.iloc[0]).strip()
+        time_val = str(row.iloc[1]).strip()
+        
+        # A列(年月日)とB列(時刻)のペアが既存データになければ追記
+        if (date_val, time_val) not in existing_keys:
+            # A〜I列の最大9要素を書き込み
+            row_data = [row.iloc[i] if i < len(row) else "" for i in range(9)]
+            ws.append(row_data)
+            existing_keys.add((date_val, time_val))
+            new_rows_count += 1
+
+    wb.save(EXCEL_PATH)
+    print(f"Excel更新完了: 新規データ {new_rows_count} 件を追記しました。")
+
 
 def main():
     if not USER_ID or not PASSWORD:
         print("エラー: KP_USER_ID または KP_PASSWORD が設定されていません。")
         return
 
-    # クラウド(Linux)上で動作させるためのChrome設定
     options = webdriver.ChromeOptions()
-    options.add_argument('--headless')  # 画面を出さずに裏で実行
+    options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--start-maximized')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    # ダウンロード設定
     prefs = {
         "download.default_directory": DOWNLOAD_DIR,
         "download.prompt_for_download": False,
@@ -89,9 +144,13 @@ def main():
         
         time.sleep(5)
 
-        # ダウンロードされたか確認
-        files = os.listdir(DOWNLOAD_DIR)
-        print(f"ダウンロード完了！ 保存ファイル一覧: {files}")
+        # ダウンロードされたCSVの特定とExcel更新
+        csv_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv"))
+        if csv_files:
+            latest_csv = max(csv_files, key=os.path.getctime)
+            update_excel_with_csv(latest_csv)
+        else:
+            print("エラー: CSVファイルがダウンロードされませんでした。")
 
     except Exception as e:
         print(f"\nエラーが発生しました: {e}")
