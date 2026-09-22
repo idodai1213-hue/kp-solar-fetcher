@@ -23,28 +23,28 @@ SHEET_NAME = "パワコン"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 def update_excel_with_csv(csv_path):
-    """ダウンロードしたCSVのデータをExcelのパワコンシートに追記更新する"""
     print(f"CSVデータの処理を開始します: {csv_path}")
     
-    # 文字コード判別（Shift-JISまたはUTF-8）
+    # 存在チェックログ
+    print(f"Excelのパス: {EXCEL_PATH}")
+    print(f"Excelファイルは存在するか?: {os.path.exists(EXCEL_PATH)}")
+
+    if not os.path.exists(EXCEL_PATH):
+        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
+        return
+
     try:
         df_csv = pd.read_csv(csv_path, encoding="shift_jis")
     except UnicodeDecodeError:
         df_csv = pd.read_csv(csv_path, encoding="utf-8")
 
-    # CSVが空でないか確認
     if df_csv.empty:
         print("CSVファイルにデータが含まれていませんでした。")
         return
 
-    # Excelファイルが存在するか確認
-    if not os.path.exists(EXCEL_PATH):
-        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
-        return
-
     wb = load_workbook(EXCEL_PATH)
     if SHEET_NAME not in wb.sheetnames:
-        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。")
+        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。現在のシート一覧: {wb.sheetnames}")
         return
     
     ws = wb[SHEET_NAME]
@@ -55,23 +55,19 @@ def update_excel_with_csv(csv_path):
         if row[0] is not None and row[1] is not None:
             existing_keys.add((str(row[0]).strip(), str(row[1]).strip()))
 
-    # CSVから新規データのみ抽出（A列=0番目, B列=1番目と仮定）
     new_rows_count = 0
     for idx, row in df_csv.iterrows():
         date_val = str(row.iloc[0]).strip()
         time_val = str(row.iloc[1]).strip()
         
-        # A列(年月日)とB列(時刻)のペアが既存データになければ追記
         if (date_val, time_val) not in existing_keys:
-            # A〜I列の最大9要素を書き込み
             row_data = [row.iloc[i] if i < len(row) else "" for i in range(9)]
             ws.append(row_data)
             existing_keys.add((date_val, time_val))
             new_rows_count += 1
 
     wb.save(EXCEL_PATH)
-    print(f"Excel更新完了: 新規データ {new_rows_count} 件を追記しました。")
-
+    print(f"Excel更新成功: 新規データ {new_rows_count} 件を追記して保存しました。")
 
 def main():
     if not USER_ID or not PASSWORD:
