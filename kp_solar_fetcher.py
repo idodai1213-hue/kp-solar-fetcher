@@ -131,7 +131,7 @@ def main():
 
         print("ID・パスワードを入力中...")
         user_id_input = wait.until(
-            EC.presence_of_element_of_locator((By.NAME, "userId"))
+            EC.presence_of_element_located((By.NAME, "userId"))
         )
         wait.until(EC.visibility_of(user_id_input))
 
