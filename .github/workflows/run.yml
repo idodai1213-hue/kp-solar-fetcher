@@ -56,3 +56,12 @@ jobs:
         run: |
           # 更新されたExcelをOneDriveの ドキュメント フォルダへ上書きアップロード
           rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/"
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add path/to/your_file.xlsx
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update Excel file"
+          git push
+          
