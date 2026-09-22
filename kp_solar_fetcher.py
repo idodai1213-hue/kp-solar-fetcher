@@ -23,43 +23,55 @@ SHEET_NAME = "パワコン"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 def update_excel_with_csv(csv_path):
-    print(f"CSVデータの処理を開始します: {csv_path}")
+    print(f"\n=== CSVデータの処理を開始: {csv_path} ===")
     
-    # 存在チェックログ
-    print(f"Excelのパス: {EXCEL_PATH}")
-    print(f"Excelファイルは存在するか?: {os.path.exists(EXCEL_PATH)}")
-
-    if not os.path.exists(EXCEL_PATH):
-        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
-        return
-
+    # 1. CSVの読み込み
     try:
         df_csv = pd.read_csv(csv_path, encoding="shift_jis")
+        print("CSVエンコーディング: shift_jis")
     except UnicodeDecodeError:
         df_csv = pd.read_csv(csv_path, encoding="utf-8")
+        print("CSVエンコーディング: utf-8")
 
+    print(f"CSV取得行数: {len(df_csv)} 行")
     if df_csv.empty:
-        print("CSVファイルにデータが含まれていませんでした。")
+        print("警報: CSVファイルが空です。")
+        return
+
+    # CSVの先頭数行を表示して確認
+    print("--- CSV先頭3行データ ---")
+    print(df_csv.head(3))
+
+    # 2. Excelの読み込み
+    if not os.path.exists(EXCEL_PATH):
+        print(f"エラー: Excelファイルが存在しません ({EXCEL_PATH})")
         return
 
     wb = load_workbook(EXCEL_PATH)
     if SHEET_NAME not in wb.sheetnames:
-        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。現在のシート一覧: {wb.sheetnames}")
+        print(f"エラー: '{SHEET_NAME}' シートがありません。存在するシート: {wb.sheetnames}")
         return
     
     ws = wb[SHEET_NAME]
 
-    # 既存データの (年月日, 時刻) 鍵集合を作成（A列=1, B列=2）
+    # 3. 既存キー（年月日, 時刻）の読み込み
     existing_keys = set()
     for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
         if row[0] is not None and row[1] is not None:
-            existing_keys.add((str(row[0]).strip(), str(row[1]).strip()))
+            # 日時表記の表記揺れを吸収（例: 2026/9/22 と 2026/09/22）
+            date_str = str(row[0]).split()[0].replace("-", "/").strip()
+            time_str = str(row[1]).strip()
+            existing_keys.add((date_str, time_str))
 
+    print(f"Excel側の既存データ件数: {len(existing_keys)} 件")
+
+    # 4. 新規データの追記
     new_rows_count = 0
     for idx, row in df_csv.iterrows():
-        date_val = str(row.iloc[0]).strip()
+        date_val = str(row.iloc[0]).split()[0].replace("-", "/").strip()
         time_val = str(row.iloc[1]).strip()
         
+        # 既存キーに存在しない場合のみ追記
         if (date_val, time_val) not in existing_keys:
             row_data = [row.iloc[i] if i < len(row) else "" for i in range(9)]
             ws.append(row_data)
@@ -67,7 +79,8 @@ def update_excel_with_csv(csv_path):
             new_rows_count += 1
 
     wb.save(EXCEL_PATH)
-    print(f"Excel更新成功: 新規データ {new_rows_count} 件を追記して保存しました。")
+    print(f"=== Excel更新完了: 新規データ 【 {new_rows_count} 件 】 を追加保存しました ===")
+
 
 def main():
     if not USER_ID or not PASSWORD:
@@ -140,7 +153,7 @@ def main():
         
         time.sleep(5)
 
-        # ダウンロードされたCSVの特定とExcel更新
+        # CSVファイルの取得と処理
         csv_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv"))
         if csv_files:
             latest_csv = max(csv_files, key=os.path.getctime)
