@@ -1,172 +1,195 @@
 import os
+import sys
 import glob
-import time
 import pandas as pd
 from openpyxl import load_workbook
-from dotenv import load_dotenv
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 
-load_dotenv()
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+# --------------------------------------------------
+# 設定値・環境変数
+# --------------------------------------------------
+KP_USER_ID = os.environ.get("KP_USER_ID")
+KP_PASSWORD = os.environ.get("KP_PASSWORD")
 
 LOGIN_URL = "https://ctrl.kp-net.com/settingcontrol/login"
-USER_ID = os.getenv("KP_USER_ID")
-PASSWORD = os.getenv("KP_PASSWORD")
+EXCEL_PATH = "solar_data.xlsx"  # 更新対象のExcelファイルパス
+SHEET_NAME = "パワコン"         # 追記対象のシート名
 
-DOWNLOAD_DIR = os.path.abspath("./downloads")
-EXCEL_PATH = os.path.abspath("./太陽光発電システム_2026年.xlsx")
-SHEET_NAME = "パワコン"
+# CSVのダウンロード先フォルダ（スクリプトと同じ階層の downloads フォルダ）
+DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
 
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+def create_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    # ダウンロードフォルダの設定（ヘッドレスモード時の自動保存先指定）
+    if not os.path.exists(DOWNLOAD_DIR):
+        os.makedirs(DOWNLOAD_DIR)
+
+    prefs = {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    options.add_experimental_option("prefs", prefs)
+
+    return webdriver.Chrome(options=options)
+
 
 def update_excel_with_csv(csv_path):
-    print(f"\n=== CSVデータの処理を開始: {csv_path} ===")
+    """ダウンロードしたCSVのデータをExcelのパワコンシートに追記更新する"""
+    print(f"CSVデータの処理を開始します: {csv_path}")
     
-    # 1. CSVの読み込み
+    # 文字コード判別（Shift-JISまたはUTF-8）
     try:
         df_csv = pd.read_csv(csv_path, encoding="shift_jis")
-        print("CSVエンコーディング: shift_jis")
     except UnicodeDecodeError:
         df_csv = pd.read_csv(csv_path, encoding="utf-8")
-        print("CSVエンコーディング: utf-8")
 
-    print(f"CSV取得行数: {len(df_csv)} 行")
+    # CSVが空でないか確認
     if df_csv.empty:
-        print("警報: CSVファイルが空です。")
+        print("CSVファイルにデータが含まれていませんでした。")
         return
 
-    # CSVの先頭数行を表示して確認
-    print("--- CSV先頭3行データ ---")
-    print(df_csv.head(3))
-
-    # 2. Excelの読み込み
+    # Excelファイルが存在するか確認
     if not os.path.exists(EXCEL_PATH):
-        print(f"エラー: Excelファイルが存在しません ({EXCEL_PATH})")
+        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
         return
 
     wb = load_workbook(EXCEL_PATH)
     if SHEET_NAME not in wb.sheetnames:
-        print(f"エラー: '{SHEET_NAME}' シートがありません。存在するシート: {wb.sheetnames}")
+        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。")
         return
     
     ws = wb[SHEET_NAME]
 
-    # 3. 既存キー（年月日, 時刻）の読み込み
+    # 既存データの (年月日, 時刻) 鍵集合を作成（A列=1, B列=2）
     existing_keys = set()
     for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
         if row[0] is not None and row[1] is not None:
-            # 日時表記の表記揺れを吸収（例: 2026/9/22 と 2026/09/22）
-            date_str = str(row[0]).split()[0].replace("-", "/").strip()
-            time_str = str(row[1]).strip()
-            existing_keys.add((date_str, time_str))
+            existing_keys.add((str(row[0]).strip(), str(row[1]).strip()))
 
-    print(f"Excel側の既存データ件数: {len(existing_keys)} 件")
-
-    # 4. 新規データの追記
+    # CSVから新規データのみ抽出（A列=0番目, B列=1番目と仮定）
     new_rows_count = 0
     for idx, row in df_csv.iterrows():
-        date_val = str(row.iloc[0]).split()[0].replace("-", "/").strip()
+        date_val = str(row.iloc[0]).strip()
         time_val = str(row.iloc[1]).strip()
         
-        # 既存キーに存在しない場合のみ追記
+        # A列(年月日)とB列(時刻)のペアが既存データになければ追記
         if (date_val, time_val) not in existing_keys:
+            # A〜I列の最大9要素を書き込み
             row_data = [row.iloc[i] if i < len(row) else "" for i in range(9)]
             ws.append(row_data)
             existing_keys.add((date_val, time_val))
             new_rows_count += 1
 
     wb.save(EXCEL_PATH)
-    print(f"=== Excel更新完了: 新規データ 【 {new_rows_count} 件 】 を追加保存しました ===")
+    print(f"Excel更新完了: 新規データ {new_rows_count} 件を追記しました。")
+
+
+def get_latest_downloaded_csv(download_dir):
+    """ダウンロードフォルダ内から最新のCSVファイルを取得する"""
+    csv_files = glob.glob(os.path.join(download_dir, "*.csv"))
+    if not csv_files:
+        return None
+    return max(csv_files, key=os.path.getctime)
 
 
 def main():
-    if not USER_ID or not PASSWORD:
-        print("エラー: KP_USER_ID または KP_PASSWORD が設定されていません。")
-        return
+    if not KP_USER_ID or not KP_PASSWORD:
+        print("エラー: 環境変数 KP_USER_ID または KP_PASSWORD が設定されていません。")
+        sys.exit(1)
 
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--start-maximized')
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
-    prefs = {
-        "download.default_directory": DOWNLOAD_DIR,
-        "download.prompt_for_download": False,
-        "directory_upgrade": True
-    }
-    options.add_experimental_option("prefs", prefs)
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver = create_driver()
+    wait = WebDriverWait(driver, 15)
 
     try:
         print("ログインページへアクセス中...")
         driver.get(LOGIN_URL)
-        time.sleep(3)
+
+        # iframeの存在チェック・切り替え
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        if iframes:
+            print(f"iframeを検出しました ({len(iframes)}個)。フレーム内に切り替えます...")
+            driver.switch_to.frame(iframes[0])
 
         print("ID・パスワードを入力中...")
-        try:
-            id_input = driver.find_element(By.ID, "userId")
-        except:
-            id_input = driver.find_element(By.NAME, "userId")
+        user_id_input = wait.until(
+            EC.presence_of_element_of_locator((By.NAME, "userId"))
+        )
+        wait.until(EC.visibility_of(user_id_input))
 
-        try:
-            pass_input = driver.find_element(By.ID, "password")
-        except:
-            pass_input = driver.find_element(By.NAME, "password")
+        user_id_input.clear()
+        user_id_input.send_keys(KP_USER_ID)
 
-        id_input.clear()
-        id_input.send_keys(USER_ID)
-        pass_input.clear()
-        pass_input.send_keys(PASSWORD)
+        # パスワード入力（※属性名が異なる場合は変更してください）
+        password_input = driver.find_element(By.NAME, "password")
+        password_input.clear()
+        password_input.send_keys(KP_PASSWORD)
 
-        print("ログインボタンをクリック...")
-        try:
-            login_btn = driver.find_element(By.XPATH, "//button[@type='submit'] | //input[@type='submit']")
-            login_btn.click()
-        except:
-            pass_input.send_keys(Keys.RETURN)
+        # ログインボタンをクリック
+        submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+        submit_button.click()
 
-        time.sleep(5)
+        print("ログイン処理を実行しました。遷移を待機中...")
+        wait.until(lambda d: d.current_url != LOGIN_URL)
+        print("ログインに成功しました。現在のURL:", driver.current_url)
 
-        print("「各種データのCSV出力」をクリック中...")
-        btn = driver.find_element(By.XPATH, "//form[contains(@action, 'variousdataoutputselect')]//button")
-        btn.click()
-        time.sleep(3)
-
-        print("「計測データのCSV出力」をクリック中...")
-        try:
-            driver.find_element(By.XPATH, "//*[contains(text(), '計測データ')]").click()
-        except:
-            driver.find_element(By.XPATH, "//button[contains(., '計測データ')]").click()
-        time.sleep(3)
-
-        print("「データ出力」をクリック中...")
-        try:
-            driver.find_element(By.XPATH, "//*[contains(text(), 'データ出力')]").click()
-        except:
-            driver.find_element(By.XPATH, "//button[@type='submit']").click()
+        # --------------------------------------------------
+        # CSVダウンロード画面へ遷移 & ダウンロードボタン押下
+        # --------------------------------------------------
+        print("CSVダウンロードボタンを探しています...")
         
+        # 例：CSVダウンロードボタンをクリック（※実際のページのセレクタに合わせて変更してください）
+        # download_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".csv-download-button")))
+        # download_btn.click()
+        
+        # ダウンロード完了を数秒待機
+        import time
         time.sleep(5)
 
-        # CSVファイルの取得と処理
-        csv_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.csv"))
-        if csv_files:
-            latest_csv = max(csv_files, key=os.path.getctime)
-            update_excel_with_csv(latest_csv)
+        # ダウンロードしたCSVファイルの取得
+        csv_path = get_latest_downloaded_csv(DOWNLOAD_DIR)
+        
+        if csv_path and os.path.exists(csv_path):
+            # --------------------------------------------------
+            # CSVデータを使ってExcelを更新
+            # --------------------------------------------------
+            update_excel_with_csv(csv_path)
         else:
-            print("エラー: CSVファイルがダウンロードされませんでした。")
+            print("エラー: ダウンロードされたCSVファイルが見つかりませんでした。")
 
-    except Exception as e:
-        print(f"\nエラーが発生しました: {e}")
-        print(f"エラー時のURL: {driver.current_url}")
+    except (TimeoutException, NoSuchElementException) as e:
+        print(f"\n[エラー] 要素が見つからないか、タイムアウトしました: {e}")
+        print("現在のURL:", driver.current_url)
+        
+        # デバッグ用の情報保存
+        driver.save_screenshot("error_screenshot.png")
+        with open("error_page.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+            
+        print("デバッグ用ファイルを保存しました (error_screenshot.png / error_page.html)")
+        sys.exit(1)
 
     finally:
         driver.quit()
+
 
 if __name__ == "__main__":
     main()
