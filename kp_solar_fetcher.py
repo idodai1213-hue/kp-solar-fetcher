@@ -117,34 +117,90 @@ def main():
         sys.exit(1)
 
     driver = create_driver()
-    wait = WebDriverWait(driver, 15)
+    wait = WebDriverWait(driver, 20)  # 待機時間を少し伸ばす(20秒)
 
     try:
         print("ログインページへアクセス中...")
         driver.get(LOGIN_URL)
 
-        # iframeの存在チェック・切り替え
-        iframes = driver.find_elements(By.TAG_NAME, "iframe")
-        if iframes:
-            print(f"iframeを検出しました ({len(iframes)}個)。フレーム内に切り替えます...")
-            driver.switch_to.frame(iframes[0])
-
         print("ID・パスワードを入力中...")
-        user_id_input = wait.until(
-            EC.presence_of_element_located((By.NAME, "userId"))
-        )
-        wait.until(EC.visibility_of(user_id_input))
 
+        # --------------------------------------------------
+        # 1. まず親フレーム(デフォルト)側で入力欄を探す
+        # --------------------------------------------------
+        user_id_input = None
+        
+        # 多様なセレクタでユーザーID入力欄を探す (NAME="userId", ID="userId", type="text" など)
+        id_selectors = [
+            (By.NAME, "userId"),
+            (By.ID, "userId"),
+            (By.NAME, "id"),
+            (By.XPATH, "//input[@type='text' or @type='email']"),
+        ]
+
+        # 親フレームで試行
+        for by, value in id_selectors:
+            try:
+                user_id_input = driver.find_element(by, value)
+                if user_id_input.is_displayed():
+                    print(f"親フレームで要素が見つかりました: {by}={value}")
+                    break
+            except NoSuchElementException:
+                continue
+
+        # 2. 親フレームで見つからなかった場合のみ iframe を順に探す
+        if not user_id_input or not user_id_input.is_displayed():
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            if iframes:
+                print(f"iframeを検出しました ({len(iframes)}個)。フレーム内を検索します...")
+                for idx, iframe in enumerate(iframes):
+                    driver.switch_to.default_content()
+                    driver.switch_to.frame(iframe)
+                    for by, value in id_selectors:
+                        try:
+                            user_id_input = driver.find_element(by, value)
+                            if user_id_input.is_displayed():
+                                print(f"iframe[{idx}] 内で要素が見つかりました: {by}={value}")
+                                break
+                        except NoSuchElementException:
+                            continue
+                    if user_id_input and user_id_input.is_displayed():
+                        break
+
+        # 最終確認：見つからない場合はタイムアウト判定へ
+        if not user_id_input:
+            # waitを使ってエラー（TimeoutException）を意図的に発生させてcatchブロックへ渡す
+            user_id_input = wait.until(
+                EC.visibility_of_element_located((By.NAME, "userId"))
+            )
+
+        # IDとパスワードの入力
         user_id_input.clear()
         user_id_input.send_keys(KP_USER_ID)
 
-        # パスワード入力（※属性名が異なる場合は変更してください）
-        password_input = driver.find_element(By.NAME, "password")
-        password_input.clear()
-        password_input.send_keys(KP_PASSWORD)
+        # パスワード入力欄の特定 (NAME="password", ID="password", type="password")
+        password_input = None
+        pass_selectors = [
+            (By.NAME, "password"),
+            (By.ID, "password"),
+            (By.XPATH, "//input[@type='password']"),
+        ]
+        for by, value in pass_selectors:
+            try:
+                password_input = driver.find_element(by, value)
+                if password_input.is_displayed():
+                    break
+            except NoSuchElementException:
+                continue
 
-        # ログインボタンをクリック
-        submit_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+        if password_input:
+            password_input.clear()
+            password_input.send_keys(KP_PASSWORD)
+
+        # ログインボタンの特定とクリック
+        submit_button = driver.find_element(
+            By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], button, input[type='button']"
+        )
         submit_button.click()
 
         print("ログイン処理を実行しました。遷移を待機中...")
