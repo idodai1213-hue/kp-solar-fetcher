@@ -38,6 +38,7 @@ jobs:
           type = onedrive
           token = $RCLONE_TOKEN
           drive_type = personal
+          drive_id = me
           EOF
 
       - name: Download Excel from OneDrive
