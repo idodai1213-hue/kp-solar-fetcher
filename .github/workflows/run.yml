@@ -37,13 +37,13 @@ jobs:
       - name: Download Master CSV from OneDrive
         run: |
           echo "=== 古いローカルCSVの削除 ==="
-          rm -f ./パワコン.csv
+          rm -f ./パワコン_2026.csv
           
-          echo "=== OneDriveからパワコン.csvをダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/パワコン.csv" ./ -v
+          echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
+          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v || rclone copy "onedrive:Documents/パワコン_2026.csv" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
-          ls -la パワコン.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
+          ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
 
       - name: Run Solar Fetcher & CSV Update
         env:
@@ -54,5 +54,6 @@ jobs:
 
       - name: Upload updated CSV to OneDrive
         run: |
-          echo "=== 更新されたパワコン.csvをOneDriveへアップロード開始 ==="
-          rclone copy ./パワコン.csv "onedrive:Documents/" -v
+          echo "=== 更新されたパワコン_2026.csvをOneDriveへアップロード開始 ==="
+          rclone copy ./パワコン_2026.csv "onedrive:ドキュメント/" -v
+          rclone copy ./パワコン_2026.csv "onedrive:Documents/" -v
