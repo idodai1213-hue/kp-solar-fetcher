@@ -1,13 +1,12 @@
-name: KP-NET Solar Data Auto Fetcher
+name: KP Solar Fetcher & OneDrive Sync Cron
 
 on:
   schedule:
-    # 毎日夜間・早朝等に定期実行（例: 毎日 UTC 19:00 = JST 04:00）
-    - cron: '0 19 * * *'
-  workflow_dispatch: # 手動実行用ボタン
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
-  fetch-and-update:
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,23 +21,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas selenium webdriver-manager
+          pip install selenium webdriver-manager python-dotenv pandas
 
-      - name: Install rclone
+      - name: Install Rclone
         run: |
-          sudo apt-get update
-          sudo apt-get install -y rclone
+          curl https://rclone.org/install.sh | sudo bash
 
-      - name: Setup rclone config
+      - name: Configure Rclone
         env:
-          RCLONE_ONEDRIVE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
+          RCLONE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
           [onedrive]
           type = onedrive
-          token = $RCLONE_ONEDRIVE_TOKEN
+          token = $RCLONE_TOKEN
           drive_type = personal
+          drive_id = me
           EOF
 
       - name: Download Master CSV from OneDrive
@@ -46,8 +45,8 @@ jobs:
           echo "=== 古いローカルCSVの削除 ==="
           rm -f ./パワコン_2026.csv
           
-          echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v
+          echo "=== OneDriveからCSVを強制ダウンロード開始 ==="
+          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
           ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
@@ -56,10 +55,9 @@ jobs:
         env:
           KP_USER_ID: ${{ secrets.KP_USER_ID }}
           KP_PASSWORD: ${{ secrets.KP_PASSWORD }}
-        run: |
-          python kp_solar_fetcher.py
+        run: python kp_solar_fetcher.py
 
       - name: Upload updated CSV to OneDrive
         run: |
-          echo "=== 更新されたパワコン_2026.csvをOneDriveへアップロード開始 ==="
+          echo "=== 更新されたCSVをOneDriveへアップロード開始 ==="
           rclone copy ./パワコン_2026.csv "onedrive:Documents/" -v
