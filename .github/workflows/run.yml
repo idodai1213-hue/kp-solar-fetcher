@@ -47,7 +47,7 @@ jobs:
           
           echo "=== OneDriveからExcelを強制ダウンロード開始 ==="
           # 「ドキュメント」または「Documents」のどちらかから取得
-          rclone copy "onedrive:Documents/太陽光発電システム_2026年.xlsx" ./ -v || rclone copy "onedrive:ドキュメント/太陽光発電システム_2026年.xlsx" ./ -v
+          rclone copy "onedrive:ドキュメント/太陽光発電システム_2026年.xlsx" ./ -v
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
           ls -la 太陽光発電システム_2026年.xlsx
@@ -61,4 +61,4 @@ jobs:
       - name: Upload updated Excel to OneDrive
         run: |
           echo "=== 更新されたExcelをOneDriveへアップロード開始 ==="
-          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:Documents/" -v || rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:ドキュメント/" -v
+          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:Documents/" -v
