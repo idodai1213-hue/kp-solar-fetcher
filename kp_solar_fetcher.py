@@ -1,46 +1,43 @@
 import os
 import sys
 import glob
+import time
 import pandas as pd
-from openpyxl import load_workbook
 
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from webdriver_manager.chrome import ChromeDriverManager
 
-# --------------------------------------------------
-# 設定値・環境変数
-# --------------------------------------------------
-KP_USER_ID = os.environ.get("KP_USER_ID")
-KP_PASSWORD = os.environ.get("KP_PASSWORD")
-
+# ==========================================
+# 1. 設定情報
+# ==========================================
 LOGIN_URL = "https://ctrl.kp-net.com/settingcontrol/login"
-EXCEL_PATH = "solar_data.xlsx"  # 更新対象のExcelファイルパス
-SHEET_NAME = "パワコン"         # 追記対象のシート名
+USER_ID = os.getenv("KP_USER_ID")
+PASSWORD = os.getenv("KP_PASSWORD")
 
-# CSVのダウンロード先フォルダ（スクリプトと同じ階層の downloads フォルダ）
-DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
+# CSVの保存先フォルダ（スクリプトと同じ場所のdownloadsフォルダ）
+DOWNLOAD_DIR = os.path.abspath("./downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# 更新対象のExcelファイル（プロジェクト直下に配置されている前提）
+EXCEL_PATH = os.path.abspath("./data.xlsx")  # ※必要に応じてご自身のファイル名（例: solar_data.xlsx 等）に変更してください
 
 
 def create_driver():
+    """GitHub Actions (Headless) およびローカル両対応のChrome Driverを作成"""
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    
+    # GitHub Actions等のCI環境向けのオプション設定
+    options.add_argument('--headless=new')  # 新しいヘッドレスモード
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    # ダウンロードフォルダの設定（ヘッドレスモード時の自動保存先指定）
-    if not os.path.exists(DOWNLOAD_DIR):
-        os.makedirs(DOWNLOAD_DIR)
-
+    # CSV自動ダウンロードの設定（Headless環境でもダウンロードを許可）
     prefs = {
         "download.default_directory": DOWNLOAD_DIR,
         "download.prompt_for_download": False,
@@ -49,229 +46,146 @@ def create_driver():
     }
     options.add_experimental_option("prefs", prefs)
 
-    return webdriver.Chrome(options=options)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
 
+    # Headlessモードでダウンロードを許可するためのDevToolsコマンド呼び出し
+    driver.execute_cdp_cmd(
+        "Page.setDownloadBehavior",
+        {"behavior": "allow", "downloadPath": DOWNLOAD_DIR}
+    )
 
-def update_excel_with_csv(csv_path):
-    """ダウンロードしたCSVのデータをExcelのパワコンシートに追記更新する"""
-    print(f"CSVデータの処理を開始します: {csv_path}")
-    
-    # 文字コード判別（Shift-JISまたはUTF-8）
-    try:
-        df_csv = pd.read_csv(csv_path, encoding="shift_jis")
-    except UnicodeDecodeError:
-        df_csv = pd.read_csv(csv_path, encoding="utf-8")
-
-    # CSVが空でないか確認
-    if df_csv.empty:
-        print("CSVファイルにデータが含まれていませんでした。")
-        return
-
-    # Excelファイルが存在するか確認
-    if not os.path.exists(EXCEL_PATH):
-        print(f"エラー: 集計用Excelファイルが見つかりません ({EXCEL_PATH})")
-        return
-
-    wb = load_workbook(EXCEL_PATH)
-    if SHEET_NAME not in wb.sheetnames:
-        print(f"エラー: Excel内に '{SHEET_NAME}' シートが存在しません。")
-        return
-    
-    ws = wb[SHEET_NAME]
-
-    # 既存データの (年月日, 時刻) 鍵集合を作成（A列=1, B列=2）
-    existing_keys = set()
-    for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
-        if row[0] is not None and row[1] is not None:
-            existing_keys.add((str(row[0]).strip(), str(row[1]).strip()))
-
-    # CSVから新規データのみ抽出（A列=0番目, B列=1番目と仮定）
-    new_rows_count = 0
-    for idx, row in df_csv.iterrows():
-        date_val = str(row.iloc[0]).strip()
-        time_val = str(row.iloc[1]).strip()
-        
-        # A列(年月日)とB列(時刻)のペアが既存データになければ追記
-        if (date_val, time_val) not in existing_keys:
-            # A〜I列の最大9要素を書き込み
-            row_data = [row.iloc[i] if i < len(row) else "" for i in range(9)]
-            ws.append(row_data)
-            existing_keys.add((date_val, time_val))
-            new_rows_count += 1
-
-    wb.save(EXCEL_PATH)
-    print(f"Excel更新完了: 新規データ {new_rows_count} 件を追記しました。")
+    return driver
 
 
 def get_latest_downloaded_csv(download_dir):
-    """ダウンロードフォルダ内から最新のCSVファイルを取得する"""
+    """指定ディレクトリ内で最新のCSVファイルを取得"""
     csv_files = glob.glob(os.path.join(download_dir, "*.csv"))
     if not csv_files:
         return None
-    return max(csv_files, key=os.path.getctime)
+    latest_file = max(csv_files, key=os.path.getmtime)
+    return latest_file
+
+
+def update_excel_with_csv(csv_path):
+    """ダウンロードしたCSVのデータでExcelファイルを更新"""
+    print(f"ダウンロードされたCSVを読み込んでいます: {csv_path}")
+    
+    # 文字コードの判定（Shift-JISまたはUTF-8）
+    try:
+        df_csv = pd.read_csv(csv_path, encoding="shift_jis")
+    except Exception:
+        df_csv = pd.read_csv(csv_path, encoding="utf-8")
+
+    print("CSVデータの先頭サンプル:")
+    print(df_csv.head(3))
+
+    if os.path.exists(EXCEL_PATH):
+        print(f"既存のExcelファイルを更新中: {EXCEL_PATH}")
+        # openpyxl等を使ってExcelに書き込み
+        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+            df_csv.to_excel(writer, sheet_name="最新データ", index=False)
+        print("Excelファイルの更新が完了しました！")
+    else:
+        print(f"新規Excelファイルを作成中: {EXCEL_PATH}")
+        df_csv.to_excel(EXCEL_PATH, sheet_name="最新データ", index=False)
+        print("新規Excelファイルの作成が完了しました！")
 
 
 def main():
-    if not KP_USER_ID or not KP_PASSWORD:
+    if not USER_ID or not PASSWORD:
         print("エラー: 環境変数 KP_USER_ID または KP_PASSWORD が設定されていません。")
         sys.exit(1)
 
     driver = create_driver()
-    wait = WebDriverWait(driver, 20)  # 待機時間を少し伸ばす(20秒)
 
     try:
+        # ==========================================
+        # 3. ログイン処理
+        # ==========================================
         print("ログインページへアクセス中...")
         driver.get(LOGIN_URL)
+        time.sleep(3)
 
         print("ID・パスワードを入力中...")
-
-        # --------------------------------------------------
-        # 1. まず親フレーム(デフォルト)側で入力欄を探す
-        # --------------------------------------------------
-        user_id_input = None
-        
-        # 多様なセレクタでユーザーID入力欄を探す (NAME="userId", ID="userId", type="text" など)
-        id_selectors = [
-            (By.NAME, "userId"),
-            (By.ID, "userId"),
-            (By.NAME, "id"),
-            (By.XPATH, "//input[@type='text' or @type='email']"),
-        ]
-
-        # 親フレームで試行
-        for by, value in id_selectors:
+        try:
+            id_input = driver.find_element(By.ID, "userId")
+        except Exception:
             try:
-                user_id_input = driver.find_element(by, value)
-                if user_id_input.is_displayed():
-                    print(f"親フレームで要素が見つかりました: {by}={value}")
-                    break
-            except NoSuchElementException:
-                continue
-
-        # 2. 親フレームで見つからなかった場合のみ iframe を順に探す
-        if not user_id_input or not user_id_input.is_displayed():
-            iframes = driver.find_elements(By.TAG_NAME, "iframe")
-            if iframes:
-                print(f"iframeを検出しました ({len(iframes)}個)。フレーム内を検索します...")
-                for idx, iframe in enumerate(iframes):
-                    driver.switch_to.default_content()
-                    driver.switch_to.frame(iframe)
-                    for by, value in id_selectors:
-                        try:
-                            user_id_input = driver.find_element(by, value)
-                            if user_id_input.is_displayed():
-                                print(f"iframe[{idx}] 内で要素が見つかりました: {by}={value}")
-                                break
-                        except NoSuchElementException:
-                            continue
-                    if user_id_input and user_id_input.is_displayed():
-                        break
-
-        # 最終確認：見つからない場合はタイムアウト判定へ
-        if not user_id_input:
-            # waitを使ってエラー（TimeoutException）を意図的に発生させてcatchブロックへ渡す
-            user_id_input = wait.until(
-                EC.visibility_of_element_located((By.NAME, "userId"))
-            )
-
-        # IDとパスワードの入力
-        user_id_input.clear()
-        user_id_input.send_keys(KP_USER_ID)
-
-        # パスワード入力欄の特定 (NAME="password", ID="password", type="password")
-        password_input = None
-        pass_selectors = [
-            (By.NAME, "password"),
-            (By.ID, "password"),
-            (By.XPATH, "//input[@type='password']"),
-        ]
-        for by, value in pass_selectors:
-            try:
-                password_input = driver.find_element(by, value)
-                if password_input.is_displayed():
-                    break
-            except NoSuchElementException:
-                continue
-
-        if password_input:
-            password_input.clear()
-            password_input.send_keys(KP_PASSWORD)
-
-        # ログインボタンの特定とクリック
-        submit_button = driver.find_element(
-            By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], button, input[type='button']"
-        )
-        submit_button.click()
-
-        print("ログイン処理を実行しました。遷移を待機中...")
-        wait.until(lambda d: d.current_url != LOGIN_URL)
-        print("ログインに成功しました。現在のURL:", driver.current_url)
-
-        # --------------------------------------------------
-        # CSVダウンロード画面へ遷移 & ダウンロードボタン押下
-        # --------------------------------------------------
-print("CSVダウンロードボタンを探しています...")
-
-        # --------------------------------------------------
-        # CSVダウンロードボタンの特定とクリック
-        # --------------------------------------------------
-        # 「CSV」という文字が含まれるボタンやリンク、または一般的なダウンロード用ボタンを探す
-        csv_btn_selectors = [
-            (By.XPATH, "//button[contains(text(), 'CSV')]"),
-            (By.XPATH, "//a[contains(text(), 'CSV')]"),
-            (By.XPATH, "//input[@type='button' or @type='submit'][contains(@value, 'CSV')]"),
-            (By.XPATH, "//*[contains(text(), 'ダウンロード') or contains(text(), 'CSV')]"),
-            (By.CSS_SELECTOR, ".csv-download, .btn-download, #csvDownload")
-        ]
-
-        download_btn = None
-        for by, value in csv_btn_selectors:
-            try:
-                elem = driver.find_element(by, value)
-                if elem.is_displayed():
-                    download_btn = elem
-                    print(f"CSVダウンロードボタンを発見しました: {by}={value}")
-                    break
-            except NoSuchElementException:
-                continue
-
-        if download_btn:
-            # ボタンをクリック（通常クリックが失敗した場合はJavaScriptクリックを実行）
-            try:
-                download_btn.click()
+                id_input = driver.find_element(By.NAME, "userId")
             except Exception:
-                driver.execute_script("arguments[0].click();", download_btn)
-            print("CSVダウンロードボタンをクリックしました。ファイルを待機中...")
-        else:
-            print("警告: ページ上にCSVダウンロードボタンが見つかりませんでした。")
+                id_input = driver.find_element(By.XPATH, "//input[@type='text' or @type='email']")
 
-        # ファイルがダウンロードされるまで最大15秒待機
-        import time
-        downloaded_csv = None
-        for _ in range(15):
-            time.sleep(1)
-            downloaded_csv = get_latest_downloaded_csv(DOWNLOAD_DIR)
-            if downloaded_csv:
-                # .crdownload (ダウンロード中の一時ファイル) ではないことを確認
-                if not downloaded_csv.endswith(".crdownload"):
-                    break
+        try:
+            pass_input = driver.find_element(By.ID, "password")
+        except Exception:
+            try:
+                pass_input = driver.find_element(By.NAME, "password")
+            except Exception:
+                pass_input = driver.find_element(By.XPATH, "//input[@type='password']")
 
-        # ダウンロードしたCSVファイルの取得とExcel更新
+        id_input.clear()
+        id_input.send_keys(USER_ID)
+        pass_input.clear()
+        pass_input.send_keys(PASSWORD)
+
+        print("ログインボタンをクリック...")
+        try:
+            login_btn = driver.find_element(By.XPATH, "//button[@type='submit'] | //input[@type='submit']")
+            login_btn.click()
+        except Exception:
+            pass_input.send_keys(Keys.RETURN)
+
+        time.sleep(5)
+
+        # ==========================================
+        # 4. 「各種データのCSV出力」ボタンのクリック
+        # ==========================================
+        print("「各種データのCSV出力」をクリック中...")
+        try:
+            btn = driver.find_element(By.XPATH, "//form[contains(@action, 'variousdataoutputselect')]//button")
+            btn.click()
+        except Exception as e1:
+            print(f"フォーム属性による検索に失敗したためフォールバック指定を試みます: {e1}")
+            btn = driver.find_element(By.XPATH, "//h5[contains(., '各種データ')]")
+            btn.click()
+
+        time.sleep(3)
+
+        # ==========================================
+        # 5. 次画面での選択・出力処理
+        # ==========================================
+        print("「計測データのCSV出力」をクリック中...")
+        try:
+            driver.find_element(By.XPATH, "//*[contains(text(), '計測データ')]").click()
+        except Exception:
+            driver.find_element(By.XPATH, "//button[contains(., '計測データ')]").click()
+        time.sleep(3)
+
+        print("「データ出力」をクリック中...")
+        try:
+            driver.find_element(By.XPATH, "//*[contains(text(), 'データ出力')]").click()
+        except Exception:
+            driver.find_element(By.XPATH, "//button[@type='submit']").click()
+
+        print("ファイルダウンロードを待機中...")
+        time.sleep(5)
+
+        # ==========================================
+        # 6. CSV取得とExcelファイルの更新
+        # ==========================================
+        downloaded_csv = get_latest_downloaded_csv(DOWNLOAD_DIR)
+
         if downloaded_csv and os.path.exists(downloaded_csv):
+            print(f"【成功】CSVファイルが正常に取得されました: {downloaded_csv}")
             update_excel_with_csv(downloaded_csv)
         else:
-            print("エラー: ダウンロードされたCSVファイルが見つかりませんでした。")        
+            print("エラー: ダウンロードされたCSVファイルが見つかりませんでした。")
+            sys.exit(1)
 
-    except (TimeoutException, NoSuchElementException) as e:
-        print(f"\n[エラー] 要素が見つからないか、タイムアウトしました: {e}")
-        print("現在のURL:", driver.current_url)
-        
-        # デバッグ用の情報保存
-        driver.save_screenshot("error_screenshot.png")
-        with open("error_page.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-            
-        print("デバッグ用ファイルを保存しました (error_screenshot.png / error_page.html)")
+    except Exception as e:
+        print(f"\nエラーが発生しました: {e}")
+        print(f"エラー時のURL: {driver.current_url}")
         sys.exit(1)
 
     finally:
