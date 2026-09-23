@@ -210,26 +210,57 @@ def main():
         # --------------------------------------------------
         # CSVダウンロード画面へ遷移 & ダウンロードボタン押下
         # --------------------------------------------------
-        print("CSVダウンロードボタンを探しています...")
-        
-        # 例：CSVダウンロードボタンをクリック（※実際のページのセレクタに合わせて変更してください）
-        # download_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".csv-download-button")))
-        # download_btn.click()
-        
-        # ダウンロード完了を数秒待機
-        import time
-        time.sleep(5)
+print("CSVダウンロードボタンを探しています...")
 
-        # ダウンロードしたCSVファイルの取得
-        csv_path = get_latest_downloaded_csv(DOWNLOAD_DIR)
-        
-        if csv_path and os.path.exists(csv_path):
-            # --------------------------------------------------
-            # CSVデータを使ってExcelを更新
-            # --------------------------------------------------
-            update_excel_with_csv(csv_path)
+        # --------------------------------------------------
+        # CSVダウンロードボタンの特定とクリック
+        # --------------------------------------------------
+        # 「CSV」という文字が含まれるボタンやリンク、または一般的なダウンロード用ボタンを探す
+        csv_btn_selectors = [
+            (By.XPATH, "//button[contains(text(), 'CSV')]"),
+            (By.XPATH, "//a[contains(text(), 'CSV')]"),
+            (By.XPATH, "//input[@type='button' or @type='submit'][contains(@value, 'CSV')]"),
+            (By.XPATH, "//*[contains(text(), 'ダウンロード') or contains(text(), 'CSV')]"),
+            (By.CSS_SELECTOR, ".csv-download, .btn-download, #csvDownload")
+        ]
+
+        download_btn = None
+        for by, value in csv_btn_selectors:
+            try:
+                elem = driver.find_element(by, value)
+                if elem.is_displayed():
+                    download_btn = elem
+                    print(f"CSVダウンロードボタンを発見しました: {by}={value}")
+                    break
+            except NoSuchElementException:
+                continue
+
+        if download_btn:
+            # ボタンをクリック（通常クリックが失敗した場合はJavaScriptクリックを実行）
+            try:
+                download_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", download_btn)
+            print("CSVダウンロードボタンをクリックしました。ファイルを待機中...")
         else:
-            print("エラー: ダウンロードされたCSVファイルが見つかりませんでした。")
+            print("警告: ページ上にCSVダウンロードボタンが見つかりませんでした。")
+
+        # ファイルがダウンロードされるまで最大15秒待機
+        import time
+        downloaded_csv = None
+        for _ in range(15):
+            time.sleep(1)
+            downloaded_csv = get_latest_downloaded_csv(DOWNLOAD_DIR)
+            if downloaded_csv:
+                # .crdownload (ダウンロード中の一時ファイル) ではないことを確認
+                if not downloaded_csv.endswith(".crdownload"):
+                    break
+
+        # ダウンロードしたCSVファイルの取得とExcel更新
+        if downloaded_csv and os.path.exists(downloaded_csv):
+            update_excel_with_csv(downloaded_csv)
+        else:
+            print("エラー: ダウンロードされたCSVファイルが見つかりませんでした。")        
 
     except (TimeoutException, NoSuchElementException) as e:
         print(f"\n[エラー] 要素が見つからないか、タイムアウトしました: {e}")
