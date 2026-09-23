@@ -4,6 +4,7 @@ import glob
 import time
 import pandas as pd
 import openpyxl
+import datetime
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -71,7 +72,7 @@ def get_latest_downloaded_csv(download_dir):
 def update_excel_with_csv(csv_path):
     """
     ダウンロードしたCSVのデータでExcelファイルの「パワコン」タブを更新。
-    openpyxlを用いて直接セル追記を行うことで、他シートのグラフや書式を保持する。
+    グラフや別シートの構造を完全に保護しつつ、新規データのみを追記する。
     """
     print(f"ダウンロードされたCSVを読み込んでいます: {csv_path}")
 
@@ -83,8 +84,6 @@ def update_excel_with_csv(csv_path):
 
     # A～I列（最初の9列）のみを取り出し
     df_csv = df_csv.iloc[:, :9]
-
-    # 列名の空白文字除去
     df_csv.columns = [str(c).strip() for c in df_csv.columns]
 
     print("CSVデータ（A〜I列）の先頭サンプル:")
@@ -97,8 +96,9 @@ def update_excel_with_csv(csv_path):
         sys.exit(1)
 
     print(f"既存のExcelファイルをオープン中: {EXCEL_PATH}")
-    # data_only=False で数式やグラフ構造を壊さずに保持してロード
-    wb = openpyxl.load_workbook(EXCEL_PATH)
+    
+    # keep_vba=True (マクロ保護), data_only=False (数式・グラフ保護) でロード
+    wb = openpyxl.load_workbook(EXCEL_PATH, keep_vba=True, data_only=False)
 
     if sheet_name not in wb.sheetnames:
         print(f"エラー: 「{sheet_name}」シートがExcel内に存在しません。")
@@ -106,51 +106,89 @@ def update_excel_with_csv(csv_path):
 
     ws = wb[sheet_name]
 
-    # 既存のA列(年月日)・B列(時刻)のペアを収集して重複チェック用のSetを作成
+    # --------------------------------------------------
+    # 1. 既存のA列(年月日)・B列(時刻)のペアを収集 (厳密な文字列化)
+    # --------------------------------------------------
     existing_keys = set()
     for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
         val_a, val_b = row[0], row[1]
         if val_a is not None and val_b is not None:
-            # 日付フォーマットの表記揺れ（2026-09-01 00:00:00 等）を文字列整形
-            str_a = str(val_a).split(" ")[0].replace("-", "/").strip()
-            str_b = str(val_b).strip()
+            # datetime型や文字列型の表記揺れを補正 ('2026/09/01' または '2026-09-01')
+            if isinstance(val_a, (datetime.datetime, datetime.date)):
+                str_a = val_a.strftime("%Y/%m/%d")
+            else:
+                str_a = str(val_a).split(" ")[0].replace("-", "/").strip()
+
+            if isinstance(val_b, datetime.time):
+                str_b = val_b.strftime("%H:%M")
+            else:
+                str_b = str(val_b).strip()
+                # '0:00' などの場合に '00:00' へ揃える補正
+                if len(str_b) == 4 and str_b[1] == ":":
+                    str_b = "0" + str_b
+
             existing_keys.add((str_a, str_b))
 
+    # --------------------------------------------------
+    # 2. CSV側から新規行を抽出
+    # --------------------------------------------------
     csv_col_a = df_csv.columns[0]
     csv_col_b = df_csv.columns[1]
 
-    added_count = 0
-
-    # 重複しない新規行のみをワークシートの末尾に追記
+    new_rows = []
     for _, row in df_csv.iterrows():
         val_a_raw = str(row[csv_col_a]).strip()
         val_b_raw = str(row[csv_col_b]).strip()
 
-        # 比較用の日付整形
+        # CSV側の日付・時刻フォーマットの標準化
         str_a = val_a_raw.split(" ")[0].replace("-", "/").strip()
         str_b = val_b_raw
+        if len(str_b) == 4 and str_b[1] == ":":
+            str_b = "0" + str_b
 
+        # 未存在のデータのみ追加対象とする
         if (str_a, str_b) not in existing_keys:
-            # 追記する行データ（1行分・9列）をリスト化
             row_data = []
             for idx, val in enumerate(row):
-                # A列（年月日）は余計な時刻がつかないよう YYYY/MM/DD の文字列として格納
                 if idx == 0:
-                    row_data.append(str_a)
+                    row_data.append(str_a)  # A列は YYYY/MM/DD の文字列
                 else:
-                    row_data.append(val)
+                    # 数値項目は float / int にキャストして保存（文字列化を防ぐ）
+                    try:
+                        if pd.isna(val):
+                            row_data.append("")
+                        elif isinstance(val, (int, float)):
+                            row_data.append(val)
+                        else:
+                            val_str = str(val).strip()
+                            row_data.append(float(val_str) if "." in val_str else int(val_str))
+                    except ValueError:
+                        row_data.append(str(val).strip())
 
-            # Excelシートの最下行へ追記
-            ws.append(row_data)
+            new_rows.append(row_data)
             existing_keys.add((str_a, str_b))
-            added_count += 1
 
-    if added_count > 0:
-        print(f"新規データ {added_count} 件を「{sheet_name}」シートに安全に追記しました。")
+    # --------------------------------------------------
+    # 3. ワークシートの最終行に直接書き込み (appendを使わずセル指定で安全に書込)
+    # --------------------------------------------------
+    if new_rows:
+        start_row = ws.max_row + 1
+        print(f"新規データ {len(new_rows)} 件を {start_row} 行目から追記します...")
+
+        for r_idx, row_data in enumerate(new_rows, start=start_row):
+            for c_idx, val in enumerate(row_data, start=1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                # A列（年月日）は文字列表示形式を明示
+                if c_idx == 1:
+                    cell.number_format = '@'
+
+        print("追記処理が完了しました。")
     else:
         print("すべてのデータが既存データ（年月日・時刻が一致）と重複しているため、追記をスキップしました。")
 
-    # 上書き保存（グラフや他シートの構造がそのまま保持されます）
+    # --------------------------------------------------
+    # 4. 保存処理
+    # --------------------------------------------------
     wb.save(EXCEL_PATH)
     wb.close()
     print("Excelファイルの保存が正常に完了しました！")
