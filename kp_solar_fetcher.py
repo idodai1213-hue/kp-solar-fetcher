@@ -22,7 +22,7 @@ DOWNLOAD_DIR = os.path.abspath("./downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # 更新対象のExcelファイル（プロジェクト直下に配置されている前提）
-EXCEL_PATH = os.path.abspath("./data.xlsx")  # ※必要に応じてご自身のファイル名（例: solar_data.xlsx 等）に変更してください
+EXCEL_PATH = os.path.abspath("./太陽光発電システム_2026年.xlsx")
 
 
 def create_driver():
@@ -68,28 +68,96 @@ def get_latest_downloaded_csv(download_dir):
 
 
 def update_excel_with_csv(csv_path):
-    """ダウンロードしたCSVのデータでExcelファイルを更新"""
+    """
+    ダウンロードしたCSVのデータでExcelファイルの「パワコン」タブを更新
+    A～I列（年月日・時刻など）を判定し、A列(年月日)・B列(時刻)の組み合わせで
+    すでに存在するデータは重複として除外して追記する。
+    """
     print(f"ダウンロードされたCSVを読み込んでいます: {csv_path}")
-    
-    # 文字コードの判定（Shift-JISまたはUTF-8）
+
+    # 文字コードの判定（Shift-JIS または UTF-8）
     try:
         df_csv = pd.read_csv(csv_path, encoding="shift_jis")
     except Exception:
         df_csv = pd.read_csv(csv_path, encoding="utf-8")
 
-    print("CSVデータの先頭サンプル:")
+    # A～I列（最初の9列）のみを取り出し
+    df_csv = df_csv.iloc[:, :9]
+
+    # 列名の空白文字除去などの標準化
+    df_csv.columns = [str(c).strip() for c in df_csv.columns]
+
+    print("CSVデータ（A〜I列）の先頭サンプル:")
     print(df_csv.head(3))
 
+    sheet_name = "パワコン"
+
     if os.path.exists(EXCEL_PATH):
-        print(f"既存のExcelファイルを更新中: {EXCEL_PATH}")
-        # openpyxl等を使ってExcelに書き込み
-        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-            df_csv.to_excel(writer, sheet_name="最新データ", index=False)
-        print("Excelファイルの更新が完了しました！")
+        print(f"既存のExcelファイルを読み込んでいます: {EXCEL_PATH}")
+        try:
+            # 既存の「パワコン」シートを読み込み
+            df_excel = pd.read_excel(EXCEL_PATH, sheet_name=sheet_name)
+            df_excel = df_excel.iloc[:, :9]  # A〜I列のみ対象
+
+            # 列名を文字列型に変換して統一
+            df_excel.columns = [str(c).strip() for c in df_excel.columns]
+
+            # A列(1列目)とB列(2列目)をキーにして重複判定
+            col_a = df_excel.columns[0]
+            col_b = df_excel.columns[1]
+
+            # 既存の年月日・時刻のペアセットを作成 (文字列化して判定)
+            existing_keys = set(
+                zip(
+                    df_excel[col_a].astype(str).str.strip(),
+                    df_excel[col_b].astype(str).str.strip(),
+                )
+            )
+
+            # CSVデータ側で未存在の行（新規データ）のみを抽出
+            csv_col_a = df_csv.columns[0]
+            csv_col_b = df_csv.columns[1]
+
+            new_rows_mask = [
+                (
+                    str(row[csv_col_a]).strip(),
+                    str(row[csv_col_b]).strip(),
+                )
+                not in existing_keys
+                for _, row in df_csv.iterrows()
+            ]
+
+            df_new = df_csv[new_rows_mask]
+
+            if not df_new.empty:
+                print(f"新規追加対象のデータ: {len(df_new)} 件")
+                # 既存データの後ろに結合
+                df_updated = pd.concat([df_excel, df_new], ignore_index=True)
+            else:
+                print(
+                    "すべてのデータが既存データ（年月日・時刻が一致）と重複しているため、追記をスキップします。"
+                )
+                df_updated = df_excel
+
+        except ValueError:
+            # 「パワコン」シートが存在しない場合は新規作成
+            print(
+                f"「{sheet_name}」シートが存在しないため、新規作成します。"
+            )
+            df_updated = df_csv
+
+        # Excelファイルへ書き出し（オープン中の数式や他シートを保持するために openpyxl モード使用）
+        with pd.ExcelWriter(
+            EXCEL_PATH, engine="openpyxl", mode="a", if_sheet_exists="replace"
+        ) as writer:
+            df_updated.to_excel(writer, sheet_name=sheet_name, index=False)
+
     else:
-        print(f"新規Excelファイルを作成中: {EXCEL_PATH}")
-        df_csv.to_excel(EXCEL_PATH, sheet_name="最新データ", index=False)
-        print("新規Excelファイルの作成が完了しました！")
+        print(f"新規Excelファイルを作成します: {EXCEL_PATH}")
+        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
+            df_csv.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    print("Excelファイルの更新が正常に完了しました！")
 
 
 def main():
