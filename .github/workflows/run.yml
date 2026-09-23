@@ -31,16 +31,11 @@ jobs:
 
       - name: Setup rclone config
         env:
-          ONEDRIVE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
-          # [onedrive] セクションを動的に自動生成
-          cat <<EOF > ~/.config/rclone/rclone.conf
-          [onedrive]
-          type = onedrive
-          token = $ONEDRIVE_TOKEN
-          drive_type = personal
-          EOF
+          # Secretの中身（[onedrive] セクションや drive_id 全体）をそのまま書き出す
+          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
           
           echo "=== 認識されているrcloneリモート一覧 ==="
           rclone listremotes
@@ -51,7 +46,7 @@ jobs:
           rm -f ./パワコン_2026.csv
           
           echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v
+          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
           ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
