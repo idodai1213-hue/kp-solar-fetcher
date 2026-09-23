@@ -40,24 +40,33 @@ jobs:
           drive_id = me
           EOF
 
+      - name: Set Current Year Environment Variable
+        run: |
+          # 動的に現在の西暦を取得（例: 2026）して環境変数 TARGET_FILE に設定
+          YEAR=$(date +%Y)
+          echo "TARGET_FILE=パワコン_${YEAR}.csv" >> $GITHUB_ENV
+          echo "今年の対象ファイル名: パワコン_${YEAR}.csv"
+
       - name: Download Master CSV from OneDrive
         run: |
           echo "=== 古いローカルCSVの削除 ==="
-          rm -f ./パワコン_2026.csv
+          rm -f ./${TARGET_FILE}
           
-          echo "=== OneDriveからCSVを強制ダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v || true
+          echo "=== OneDriveから ${TARGET_FILE} を強制ダウンロード開始 ==="
+          # ファイルが存在しない場合（新年1発目など）でもエラー終了させず新規作成へ流す
+          rclone copy "onedrive:ドキュメント/${TARGET_FILE}" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
-          ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
+          ls -la ${TARGET_FILE} || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
 
       - name: Run Solar Fetcher & CSV Update
         env:
           KP_USER_ID: ${{ secrets.KP_USER_ID }}
           KP_PASSWORD: ${{ secrets.KP_PASSWORD }}
+          CSV_FILENAME: ${{ env.TARGET_FILE }}
         run: python kp_solar_fetcher.py
 
       - name: Upload updated CSV to OneDrive
         run: |
-          echo "=== 更新されたCSVをOneDriveへアップロード開始 ==="
-          rclone copy ./パワコン_2026.csv "onedrive:Documents/" -v
+          echo "=== 更新された ${TARGET_FILE} をOneDriveへアップロード開始 ==="
+          rclone copy ./${TARGET_FILE} "onedrive:Documents/" -v
