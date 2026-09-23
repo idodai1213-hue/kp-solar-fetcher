@@ -21,7 +21,9 @@ DOWNLOAD_DIR = os.path.abspath("./downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # 管理対象のマスターCSVファイル
-CSV_PATH = os.path.abspath("./パワコン_2026.csv")
+# 環境変数 CSV_FILENAME を取得（未設定の場合は fallback として "パワコン_2026.csv" を使用）
+csv_name = os.getenv("CSV_FILENAME", "パワコン_2026.csv")
+CSV_PATH = os.path.abspath(f"./{csv_name}")
 
 
 def create_driver():
