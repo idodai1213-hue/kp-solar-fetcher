@@ -1,12 +1,13 @@
-name: KP Solar Fetcher & OneDrive Sync Cron
+name: KP-NET Solar Data Auto Fetcher
 
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    # 毎日夜間・早朝等に定期実行（例: 毎日 UTC 19:00 = JST 04:00）
+    - cron: '0 19 * * *'
+  workflow_dispatch: # 手動実行用ボタン
 
 jobs:
-  run-script:
+  fetch-and-update:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,44 +22,37 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium webdriver-manager python-dotenv pandas openpyxl
+          pip install pandas selenium webdriver-manager
 
-      - name: Install Rclone
+      - name: Install rclone
         run: |
-          curl https://rclone.org/install.sh | sudo bash
+          sudo apt-get update
+          sudo apt-get install -y rclone
 
-      - name: Configure Rclone
-        env:
-          RCLONE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
+      - name: Setup rclone config
         run: |
           mkdir -p ~/.config/rclone
-          cat <<EOF > ~/.config/rclone/rclone.conf
-          [onedrive]
-          type = onedrive
-          token = $RCLONE_TOKEN
-          drive_type = personal
-          drive_id = me
-          EOF
+          echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
 
-      - name: Download Excel from OneDrive
+      - name: Download Master CSV from OneDrive
         run: |
-          echo "=== 古いローカルExcelの削除 ==="
-          rm -f ./太陽光発電システム_2026年.xlsx
+          echo "=== 古いローカルCSVの削除 ==="
+          rm -f ./パワコン.csv
           
-          echo "=== OneDriveからExcelを強制ダウンロード開始 ==="
-          # 「ドキュメント」または「Documents」のどちらかから取得
-          rclone copy "onedrive:ドキュメント/太陽光発電システム_2026年.xlsx" ./ -v
+          echo "=== OneDriveからパワコン.csvをダウンロード開始 ==="
+          rclone copy "onedrive:ドキュメント/パワコン.csv" ./ -v
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
-          ls -la 太陽光発電システム_2026年.xlsx
+          ls -la パワコン.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
 
-      - name: Run Solar Fetcher & Excel Update
+      - name: Run Solar Fetcher & CSV Update
         env:
           KP_USER_ID: ${{ secrets.KP_USER_ID }}
           KP_PASSWORD: ${{ secrets.KP_PASSWORD }}
-        run: python kp_solar_fetcher.py
-
-      - name: Upload updated Excel to OneDrive
         run: |
-          echo "=== 更新されたExcelをOneDriveへアップロード開始 ==="
-          rclone copy ./太陽光発電システム_2026年.xlsx "onedrive:Documents/" -v
+          python kp_solar_fetcher.py
+
+      - name: Upload updated CSV to OneDrive
+        run: |
+          echo "=== 更新されたパワコン.csvをOneDriveへアップロード開始 ==="
+          rclone copy ./パワコン.csv "onedrive:Documents/" -v
