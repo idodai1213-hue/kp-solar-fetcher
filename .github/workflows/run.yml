@@ -33,6 +33,9 @@ jobs:
         run: |
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+          
+          echo "=== 認識されているrcloneリモート一覧 ==="
+          rclone listremotes
 
       - name: Download Master CSV from OneDrive
         run: |
@@ -40,8 +43,8 @@ jobs:
           rm -f ./パワコン_2026.csv
           
           echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
-          # rclone copy は第一引数に「取得元ファイルまたはフォルダ」、第二引数に「保存先フォルダ」を指定します
-          rclone copy "onedrive:ドキュメント" ./ --include "パワコン_2026.csv" -v
+          # rclone copy コマンド
+          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
           ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
