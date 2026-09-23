@@ -31,14 +31,15 @@ jobs:
 
       - name: Setup rclone config
         env:
-          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
+          RCLONE_ONEDRIVE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
-          # Secretの中身（[onedrive] セクションや drive_id 全体）をそのまま書き出す
-          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
-          
-          echo "=== 認識されているrcloneリモート一覧 ==="
-          rclone listremotes
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [onedrive]
+          type = onedrive
+          token = $RCLONE_ONEDRIVE_TOKEN
+          drive_type = personal
+          EOF
 
       - name: Download Master CSV from OneDrive
         run: |
@@ -46,7 +47,7 @@ jobs:
           rm -f ./パワコン_2026.csv
           
           echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
-          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v || true
+          rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
           ls -la パワコン_2026.csv || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
