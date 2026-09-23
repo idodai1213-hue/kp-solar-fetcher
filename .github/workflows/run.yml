@@ -69,4 +69,4 @@ jobs:
       - name: Upload updated CSV to OneDrive
         run: |
           echo "=== 更新された ${TARGET_FILE} をOneDriveへアップロード開始 ==="
-          rclone copy ./${TARGET_FILE} "onedrive:Documents/" -v
+          rclone copy ./${TARGET_FILE} "onedrive:ドキュメント/" -v
