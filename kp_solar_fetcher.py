@@ -21,7 +21,7 @@ DOWNLOAD_DIR = os.path.abspath("./downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # 管理対象のマスターCSVファイル
-CSV_PATH = os.path.abspath("./パワコン.csv")
+CSV_PATH = os.path.abspath("./パワコン_2026.csv")
 
 
 def create_driver():
@@ -65,7 +65,7 @@ def get_latest_downloaded_csv(download_dir):
 
 def update_master_csv_with_new_csv(downloaded_csv_path):
     """
-    ダウンロードしたCSVデータを読み込み、既存の「パワコン.csv」に新規行のみを追記更新する。
+    ダウンロードしたCSVデータを読み込み、既存の「パワコン_2026.csv」に新規行のみを追記更新する。
     1行目はヘッダーとし、2行目以降のA列(年月日)・B列(時刻)のペアで重複を判定。
     """
     print(f"ダウンロードされたCSVを処理中: {downloaded_csv_path}")
@@ -80,7 +80,7 @@ def update_master_csv_with_new_csv(downloaded_csv_path):
     df_new = df_new.iloc[:, :9]
     df_new.columns = [str(c).strip() for c in df_new.columns]
 
-    # 1. 既存のマスターCSV(パワコン.csv)の存在チェックと既存キーのロード
+    # 1. 既存のマスターCSV(パワコン_2026.csv)の存在チェックと既存キーのロード
     existing_keys = set()
 
     if os.path.exists(CSV_PATH):
@@ -142,7 +142,7 @@ def update_master_csv_with_new_csv(downloaded_csv_path):
             index=False,
             encoding="utf-8-sig",  # Excel等で開いても文字化けしないBOM付きUTF-8
         )
-        print(f"【成功】新規データ {len(df_to_add)} 件を「パワコン.csv」に追記しました！")
+        print(f"【成功】新規データ {len(df_to_add)} 件を「パワコン_2026.csv」に追記しました！")
     else:
         print("すべてのデータが既存データ（年月日・時刻が一致）と重複しているため、追記をスキップしました。")
 
