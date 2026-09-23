@@ -3,6 +3,7 @@ import sys
 import glob
 import time
 import pandas as pd
+import openpyxl
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -69,9 +70,8 @@ def get_latest_downloaded_csv(download_dir):
 
 def update_excel_with_csv(csv_path):
     """
-    ダウンロードしたCSVのデータでExcelファイルの「パワコン」タブを更新
-    A～I列（年月日・時刻など）を判定し、A列(年月日)・B列(時刻)の組み合わせで
-    すでに存在するデータは重複として除外して追記する。
+    ダウンロードしたCSVのデータでExcelファイルの「パワコン」タブを更新。
+    openpyxlを用いて直接セル追記を行うことで、他シートのグラフや書式を保持する。
     """
     print(f"ダウンロードされたCSVを読み込んでいます: {csv_path}")
 
@@ -84,7 +84,7 @@ def update_excel_with_csv(csv_path):
     # A～I列（最初の9列）のみを取り出し
     df_csv = df_csv.iloc[:, :9]
 
-    # 列名の空白文字除去などの標準化
+    # 列名の空白文字除去
     df_csv.columns = [str(c).strip() for c in df_csv.columns]
 
     print("CSVデータ（A〜I列）の先頭サンプル:")
@@ -92,72 +92,68 @@ def update_excel_with_csv(csv_path):
 
     sheet_name = "パワコン"
 
-    if os.path.exists(EXCEL_PATH):
-        print(f"既存のExcelファイルを読み込んでいます: {EXCEL_PATH}")
-        try:
-            # 既存の「パワコン」シートを読み込み
-            df_excel = pd.read_excel(EXCEL_PATH, sheet_name=sheet_name)
-            df_excel = df_excel.iloc[:, :9]  # A〜I列のみ対象
+    if not os.path.exists(EXCEL_PATH):
+        print(f"エラー: 更新対象のExcelファイルが見つかりません: {EXCEL_PATH}")
+        sys.exit(1)
 
-            # 列名を文字列型に変換して統一
-            df_excel.columns = [str(c).strip() for c in df_excel.columns]
+    print(f"既存のExcelファイルをオープン中: {EXCEL_PATH}")
+    # data_only=False で数式やグラフ構造を壊さずに保持してロード
+    wb = openpyxl.load_workbook(EXCEL_PATH)
 
-            # A列(1列目)とB列(2列目)をキーにして重複判定
-            col_a = df_excel.columns[0]
-            col_b = df_excel.columns[1]
+    if sheet_name not in wb.sheetnames:
+        print(f"エラー: 「{sheet_name}」シートがExcel内に存在しません。")
+        sys.exit(1)
 
-            # 既存の年月日・時刻のペアセットを作成 (文字列化して判定)
-            existing_keys = set(
-                zip(
-                    df_excel[col_a].astype(str).str.strip(),
-                    df_excel[col_b].astype(str).str.strip(),
-                )
-            )
+    ws = wb[sheet_name]
 
-            # CSVデータ側で未存在の行（新規データ）のみを抽出
-            csv_col_a = df_csv.columns[0]
-            csv_col_b = df_csv.columns[1]
+    # 既存のA列(年月日)・B列(時刻)のペアを収集して重複チェック用のSetを作成
+    existing_keys = set()
+    for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+        val_a, val_b = row[0], row[1]
+        if val_a is not None and val_b is not None:
+            # 日付フォーマットの表記揺れ（2026-09-01 00:00:00 等）を文字列整形
+            str_a = str(val_a).split(" ")[0].replace("-", "/").strip()
+            str_b = str(val_b).strip()
+            existing_keys.add((str_a, str_b))
 
-            new_rows_mask = [
-                (
-                    str(row[csv_col_a]).strip(),
-                    str(row[csv_col_b]).strip(),
-                )
-                not in existing_keys
-                for _, row in df_csv.iterrows()
-            ]
+    csv_col_a = df_csv.columns[0]
+    csv_col_b = df_csv.columns[1]
 
-            df_new = df_csv[new_rows_mask]
+    added_count = 0
 
-            if not df_new.empty:
-                print(f"新規追加対象のデータ: {len(df_new)} 件")
-                # 既存データの後ろに結合
-                df_updated = pd.concat([df_excel, df_new], ignore_index=True)
-            else:
-                print(
-                    "すべてのデータが既存データ（年月日・時刻が一致）と重複しているため、追記をスキップします。"
-                )
-                df_updated = df_excel
+    # 重複しない新規行のみをワークシートの末尾に追記
+    for _, row in df_csv.iterrows():
+        val_a_raw = str(row[csv_col_a]).strip()
+        val_b_raw = str(row[csv_col_b]).strip()
 
-        except ValueError:
-            # 「パワコン」シートが存在しない場合は新規作成
-            print(
-                f"「{sheet_name}」シートが存在しないため、新規作成します。"
-            )
-            df_updated = df_csv
+        # 比較用の日付整形
+        str_a = val_a_raw.split(" ")[0].replace("-", "/").strip()
+        str_b = val_b_raw
 
-        # Excelファイルへ書き出し（オープン中の数式や他シートを保持するために openpyxl モード使用）
-        with pd.ExcelWriter(
-            EXCEL_PATH, engine="openpyxl", mode="a", if_sheet_exists="replace"
-        ) as writer:
-            df_updated.to_excel(writer, sheet_name=sheet_name, index=False)
+        if (str_a, str_b) not in existing_keys:
+            # 追記する行データ（1行分・9列）をリスト化
+            row_data = []
+            for idx, val in enumerate(row):
+                # A列（年月日）は余計な時刻がつかないよう YYYY/MM/DD の文字列として格納
+                if idx == 0:
+                    row_data.append(str_a)
+                else:
+                    row_data.append(val)
 
+            # Excelシートの最下行へ追記
+            ws.append(row_data)
+            existing_keys.add((str_a, str_b))
+            added_count += 1
+
+    if added_count > 0:
+        print(f"新規データ {added_count} 件を「{sheet_name}」シートに安全に追記しました。")
     else:
-        print(f"新規Excelファイルを作成します: {EXCEL_PATH}")
-        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
-            df_csv.to_excel(writer, sheet_name=sheet_name, index=False)
+        print("すべてのデータが既存データ（年月日・時刻が一致）と重複しているため、追記をスキップしました。")
 
-    print("Excelファイルの更新が正常に完了しました！")
+    # 上書き保存（グラフや他シートの構造がそのまま保持されます）
+    wb.save(EXCEL_PATH)
+    wb.close()
+    print("Excelファイルの保存が正常に完了しました！")
 
 
 def main():
