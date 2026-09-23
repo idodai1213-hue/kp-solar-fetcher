@@ -30,9 +30,11 @@ jobs:
           sudo apt-get install -y rclone
 
       - name: Setup rclone config
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
           
           echo "=== 認識されているrcloneリモート一覧 ==="
           rclone listremotes
@@ -43,7 +45,6 @@ jobs:
           rm -f ./パワコン_2026.csv
           
           echo "=== OneDriveからパワコン_2026.csvをダウンロード開始 ==="
-          # rclone copy コマンド
           rclone copy "onedrive:ドキュメント/パワコン_2026.csv" ./ -v
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
