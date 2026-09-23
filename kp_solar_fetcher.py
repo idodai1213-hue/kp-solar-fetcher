@@ -72,7 +72,7 @@ def get_latest_downloaded_csv(download_dir):
 def update_excel_with_csv(csv_path):
     """
     ダウンロードしたCSVのデータでExcelファイルの「パワコン」タブを更新。
-    グラフや別シートの構造を完全に保護しつつ、新規データのみを追記する。
+    破損を防ぐため keep_vba は使用せず、既存のグラフや構造を維持しながら最小限のセル追記を行う。
     """
     print(f"ダウンロードされたCSVを読み込んでいます: {csv_path}")
 
@@ -97,8 +97,9 @@ def update_excel_with_csv(csv_path):
 
     print(f"既存のExcelファイルをオープン中: {EXCEL_PATH}")
     
-    # keep_vba=True (マクロ保護), data_only=False (数式・グラフ保護) でロード
-    wb = openpyxl.load_workbook(EXCEL_PATH, keep_vba=True, data_only=False)
+    # 【重要】keep_vba=True は .xlsx でファイルを破損させるため削除
+    # data_only=False で数式やシート構造を保持
+    wb = openpyxl.load_workbook(EXCEL_PATH, data_only=False)
 
     if sheet_name not in wb.sheetnames:
         print(f"エラー: 「{sheet_name}」シートがExcel内に存在しません。")
@@ -107,23 +108,23 @@ def update_excel_with_csv(csv_path):
     ws = wb[sheet_name]
 
     # --------------------------------------------------
-    # 1. 既存のA列(年月日)・B列(時刻)のペアを収集 (厳密な文字列化)
+    # 1. 既存のA列(年月日)・B列(時刻)のペアを収集
     # --------------------------------------------------
     existing_keys = set()
     for row in ws.iter_rows(min_row=2, max_col=2, values_only=True):
         val_a, val_b = row[0], row[1]
         if val_a is not None and val_b is not None:
-            # datetime型や文字列型の表記揺れを補正 ('2026/09/01' または '2026-09-01')
+            # 日付のフォーマット統一 ('YYYY/MM/DD')
             if isinstance(val_a, (datetime.datetime, datetime.date)):
                 str_a = val_a.strftime("%Y/%m/%d")
             else:
                 str_a = str(val_a).split(" ")[0].replace("-", "/").strip()
 
+            # 時刻のフォーマット統一 ('HH:MM')
             if isinstance(val_b, datetime.time):
                 str_b = val_b.strftime("%H:%M")
             else:
                 str_b = str(val_b).strip()
-                # '0:00' などの場合に '00:00' へ揃える補正
                 if len(str_b) == 4 and str_b[1] == ":":
                     str_b = "0" + str_b
 
@@ -140,20 +141,17 @@ def update_excel_with_csv(csv_path):
         val_a_raw = str(row[csv_col_a]).strip()
         val_b_raw = str(row[csv_col_b]).strip()
 
-        # CSV側の日付・時刻フォーマットの標準化
         str_a = val_a_raw.split(" ")[0].replace("-", "/").strip()
         str_b = val_b_raw
         if len(str_b) == 4 and str_b[1] == ":":
             str_b = "0" + str_b
 
-        # 未存在のデータのみ追加対象とする
         if (str_a, str_b) not in existing_keys:
             row_data = []
             for idx, val in enumerate(row):
                 if idx == 0:
-                    row_data.append(str_a)  # A列は YYYY/MM/DD の文字列
+                    row_data.append(str_a)
                 else:
-                    # 数値項目は float / int にキャストして保存（文字列化を防ぐ）
                     try:
                         if pd.isna(val):
                             row_data.append("")
@@ -169,7 +167,7 @@ def update_excel_with_csv(csv_path):
             existing_keys.add((str_a, str_b))
 
     # --------------------------------------------------
-    # 3. ワークシートの最終行に直接書き込み (appendを使わずセル指定で安全に書込)
+    # 3. ワークシートの末尾に書き込み
     # --------------------------------------------------
     if new_rows:
         start_row = ws.max_row + 1
@@ -178,7 +176,6 @@ def update_excel_with_csv(csv_path):
         for r_idx, row_data in enumerate(new_rows, start=start_row):
             for c_idx, val in enumerate(row_data, start=1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=val)
-                # A列（年月日）は文字列表示形式を明示
                 if c_idx == 1:
                     cell.number_format = '@'
 
