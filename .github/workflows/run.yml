@@ -31,10 +31,16 @@ jobs:
 
       - name: Setup rclone config
         env:
-          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
+          ONEDRIVE_TOKEN: ${{ secrets.RCLONE_ONEDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          # [onedrive] セクションを動的に自動生成
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [onedrive]
+          type = onedrive
+          token = $ONEDRIVE_TOKEN
+          drive_type = personal
+          EOF
           
           echo "=== 認識されているrcloneリモート一覧 ==="
           rclone listremotes
