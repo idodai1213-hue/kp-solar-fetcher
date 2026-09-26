@@ -1,12 +1,26 @@
-name: KP Solar Fetcher & OneDrive Sync Cron
+name: KP Solar Fetcher & Dashboard Auto Deploy
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 * * * *' # 毎時0分に自動実行
   workflow_dispatch:
 
+# GitHub Pages へのデプロイ権限を設定
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時実行の制御
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
 jobs:
-  run-script:
+  run-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}dash-x9k2m7p4q/
     runs-on: ubuntu-latest
 
     steps:
@@ -42,7 +56,6 @@ jobs:
 
       - name: Set Current Year Environment Variable
         run: |
-          # 動的に現在の西暦を取得（例: 2026）して環境変数 TARGET_FILE に設定
           YEAR=$(date +%Y)
           echo "TARGET_FILE=パワコン_${YEAR}.csv" >> $GITHUB_ENV
           echo "今年の対象ファイル名: パワコン_${YEAR}.csv"
@@ -53,7 +66,6 @@ jobs:
           rm -f ./${TARGET_FILE}
           
           echo "=== OneDriveから ${TARGET_FILE} を強制ダウンロード開始 ==="
-          # ファイルが存在しない場合（新年1発目など）でもエラー終了させず新規作成へ流す
           rclone copy "onedrive:ドキュメント/${TARGET_FILE}" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
@@ -70,3 +82,37 @@ jobs:
         run: |
           echo "=== 更新された ${TARGET_FILE} をOneDriveへアップロード開始 ==="
           rclone copy ./${TARGET_FILE} "onedrive:ドキュメント/" -v
+
+      # --- ここから Webダッシュボード生成 ＆ デプロイ処理 ---
+
+      - name: Generate HTML Dashboard
+        env:
+          CSV_FILENAME: ${{ env.TARGET_FILE }}
+        run: |
+          python generate_html.py
+
+      - name: Prepare Web Root (推測不能URLフォルダの構築)
+        run: |
+          # 公開用ディレクトリ _site を作成
+          mkdir -p _site/dash-x9k2m7p4q
+          
+          # 生成された index.html を推測不能フォルダに移動
+          mv index.html _site/dash-x9k2m7p4q/
+          
+          # 検索エンジンインデックス拒否設定 (robots.txt)
+          echo -e "User-agent: *\nDisallow: /" > _site/robots.txt
+          
+          # ルートアクセス時の空ページ（または404対策）
+          echo "<html><body><h1>404 Not Found</h1></body></html>" > _site/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
