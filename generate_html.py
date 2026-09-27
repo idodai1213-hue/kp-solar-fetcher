@@ -487,8 +487,8 @@ html_content = f"""<!DOCTYPE html>
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            // 1データ点あたり約7.5pxに設定（データ数に応じて詰める）
-            const minWidth = Math.max(1200, data.datetime.length * 7.5);
+            // 1データ点あたり5.625px（7.5pxから25%削減してさらに詰める）
+            const minWidth = Math.max(900, data.datetime.length * 5.625);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
             const yRange = getPowerRangeMonthly(data);
@@ -509,7 +509,7 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域 (間隔を詰めてコンパクトに配置)
+            // 3. 中央プロット領域 (幅縮小に伴いバーも25%細く描画)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -517,7 +517,7 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.datetime, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
                 {{ x: data.datetime, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.datetime, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.5 }} }},
+                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.2 }} }},
                 {{ 
                     x: data.datetime, 
                     y: data.elevation, 
@@ -525,7 +525,7 @@ html_content = f"""<!DOCTYPE html>
                     type: 'scatter', 
                     mode: 'lines', 
                     yaxis: 'y2', 
-                    line: {{ color: colors.elevation, width: 1.5, dash: 'dot' }},
+                    line: {{ color: colors.elevation, width: 1.2, dash: 'dot' }},
                     hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
                 }}
             ];
@@ -536,13 +536,13 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                bargap: 0.15,      // 棒同士の間隔を15%に抑えて詰める
+                bargap: 0.15,      // 間隔比率は維持（全体幅が縮むため棒自体も自動的に25%細くなります）
                 bargroupgap: 0,
                 xaxis: {{ 
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
                     type: 'date',
-                    dtick: 6 * 3600 * 1000, // 6時間ごとに目盛りを表示してスッキリさせる
+                    dtick: 6 * 3600 * 1000, // 6時間ごとの目盛り
                     tickformat: '%m/%d %H:%M',
                     fixedrange: true
                 }},
@@ -564,4 +564,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("月次グラフの間隔を詰めた index.html を正常に生成しました！")
+print("月次グラフをさらに25%縮小・縮小した index.html を生成しました！")
