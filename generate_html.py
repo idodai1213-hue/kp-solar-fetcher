@@ -130,7 +130,7 @@ for month_str in months:
         'buy': sub_df['買電電力量[kWh]'].tolist(),
         'discharging': sub_df['放電電力量[kWh]'].tolist(),
         'consumption': (-sub_df['消費電力量[kWh]']).tolist(),
-        'sell': (-sub_df['売電電力量[kWh]'].tolist(),
+        'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
         'elevation': sub_df['仰角'].tolist()
