@@ -4,31 +4,33 @@ import os
 import math
 
 # ---------------------------------------------------------
-# 太陽高度角（仰角）計算・スケール変換関数 (多治見市)
+# 太陽位置およびパネル受光強度計算関数 (多治見市 / 南南東 / 傾斜25度)
 # ---------------------------------------------------------
 LATITUDE = 35.333   # 多治見市の緯度 (北緯)
 LONGITUDE = 137.033 # 多治見市の経度 (東経)
 
-def calculate_solar_elevation_scaled(dt, lat=LATITUDE, lon=LONGITUDE):
+PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
+PANEL_AZIMUTH_DEG = 157.5   # パネルの方位角 [度] (南:180°, 南南東:157.5°)
+
+def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
     """
-    指定された日時(dt: datetimeオブジェクト)における太陽の仰角[度]を計算し、
-    -90°〜90° を 0〜100 のスケール（0°=50, 90°=100, -90°=0）に変換して返す。
+    指定日時の太陽位置（高度角・方位角）から、南南東・25度傾斜パネルへの受光強度(0〜100)を算出する。
+    100 = パネル面に完全に垂直に光が射し込む（最大効率）
+    0   = 夜間またはパネルの裏側に太陽がある状態
     """
-    # 年間の通日 (Day of Year)
     day_of_year = dt.timetuple().tm_yday
     
-    # 太陽赤緯 (Declination) [rad]
+    # 1. 太陽赤緯 [rad]
     declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
     declination_rad = math.radians(declination_deg)
     
-    # 均時差 (Equation of Time) [分]
+    # 2. 均時差 [分]
     b = math.radians((360 / 365.0) * (day_of_year - 81))
     eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
     
-    # 地方時と時角 (Hour Angle) [rad]
-    lstm = 135.0  # 日本標準時(JST)
+    # 3. 時角 [rad]
+    lstm = 135.0  # 日本標準時 (JST)
     time_offset = 4.0 * (lon - lstm) + eot
-    
     time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
     solar_time_hours = time_hours + time_offset / 60.0
     
@@ -37,19 +39,41 @@ def calculate_solar_elevation_scaled(dt, lat=LATITUDE, lon=LONGITUDE):
     
     lat_rad = math.radians(lat)
     
-    # 太陽高度角の正弦 (sin(h))
+    # 4. 太陽高度角 (Elevation)
     sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
                      math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
-    
     sin_elevation = max(-1.0, min(1.0, sin_elevation))
+    elevation_rad = math.asin(sin_elevation)
+    elevation_deg = math.degrees(elevation_rad)
     
-    # 仰角 (度) : 夜間のマイナス値も保持
-    elevation_deg = math.degrees(math.asin(sin_elevation))
+    # 太陽が地平線下にある場合は 0
+    if elevation_deg <= 0:
+        return 0.0
+        
+    # 5. 太陽方位角 (Azimuth: 北=0, 東=90, 南=180, 西=270)
+    cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
+                   math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(elevation_rad)
+    cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
     
-    # スケール補正 (-90° -> 0, 0° -> 50, 90° -> 100)
-    scaled_value = (elevation_deg + 90.0) / 1.8
+    azimuth_rad = math.acos(cos_azimuth)
+    if hour_angle_deg > 0:
+        azimuth_rad = 2 * math.pi - azimuth_rad
+    solar_azimuth_deg = math.degrees(azimuth_rad)
     
-    return round(scaled_value, 2)
+    # 6. 面受光角の計算 (パネル法線と太陽光線のベクトル内積)
+    tilt_rad = math.radians(tilt)
+    panel_azimuth_rad = math.radians(panel_azimuth)
+    
+    cos_incidence = (math.sin(elevation_rad) * math.cos(tilt_rad) + 
+                     math.cos(elevation_rad) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
+                     
+    # 裏から光が入るか地表下なら 0 に丸める
+    if cos_incidence < 0:
+        cos_incidence = 0.0
+        
+    # 0〜100 のスケール値に変換
+    score = cos_incidence * 100.0
+    return round(score, 2)
 
 
 # 1. CSVファイルの読み込み
@@ -72,8 +96,8 @@ df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
-# 太陽仰角（スケール補正済み）の計算
-df['仰角'] = df['日時'].apply(calculate_solar_elevation_scaled)
+# パネル受光強度 (補正済み) の計算
+df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
 
 # 2. JSONデータの作成
@@ -106,7 +130,7 @@ for month_str in months:
         'buy': sub_df['買電電力量[kWh]'].tolist(),
         'discharging': sub_df['放電電力量[kWh]'].tolist(),
         'consumption': (-sub_df['消費電力量[kWh]']).tolist(),
-        'sell': (-sub_df['売電電力量[kWh]']).tolist(),
+        'sell': (-sub_df['売電電力量[kWh]'].tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
         'elevation': sub_df['仰角'].tolist()
@@ -282,7 +306,7 @@ html_content = f"""<!DOCTYPE html>
                 <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>太陽仰角 (0°=50)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>受光強度(南南東/25°)</div>
             </div>
 
             <!-- 日次コンテンツ -->
@@ -416,7 +440,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 80 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%] / 仰角スケール', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
@@ -432,12 +456,12 @@ html_content = f"""<!DOCTYPE html>
                 {{ 
                     x: data.time, 
                     y: data.elevation, 
-                    name: '太陽仰角', 
+                    name: '受光強度', 
                     type: 'scatter', 
                     mode: 'lines', 
                     yaxis: 'y2', 
                     line: {{ color: colors.elevation, width: 2, dash: 'dot' }},
-                    hovertemplate: '%{{x}}<br>仰角補正値: %{{y}}<extra></extra>'
+                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
                 }}
             ];
 
@@ -457,7 +481,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
-        // --- 月次グラフ描画 (30分刻み・2時間単位ラベル) ---
+        // --- 月次グラフ描画 ---
         function updateMonthlyChart() {{
             const selectedMonth = monthSelect.value;
             const data = rawMonthlyData[selectedMonth];
@@ -480,11 +504,11 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('monthlyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 90 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%] / 仰角スケール', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域 (2時間間隔のX軸ラベル指定)
+            // 3. 中央プロット領域
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -496,12 +520,12 @@ html_content = f"""<!DOCTYPE html>
                 {{ 
                     x: data.datetime, 
                     y: data.elevation, 
-                    name: '太陽仰角', 
+                    name: '受光強度', 
                     type: 'scatter', 
                     mode: 'lines', 
                     yaxis: 'y2', 
                     line: {{ color: colors.elevation, width: 1.5, dash: 'dot' }},
-                    hovertemplate: '%{{x}}<br>仰角補正値: %{{y}}<extra></extra>'
+                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
                 }}
             ];
 
@@ -537,4 +561,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("仰角を 0°=50, 90°=100, -90°=0 に補正した index.html を再生成しました！")
+print("多治見市・南南東・25度傾斜パネルへの受光強度を反映した index.html を生成しました！")
