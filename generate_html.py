@@ -68,7 +68,7 @@ html_content = f"""<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>太陽光発電 収支モニタリング</title>
-    <!-- スマホホーム画面用アイコン設定 (ライトモード対応) -->
+    <!-- スマホホーム画面用アイコン設定 -->
     <link rel="apple-touch-icon" href="solar_dashboard_icon_light.png">
     <link rel="icon" type="image/png" href="solar_dashboard_icon_light.png">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -86,7 +86,7 @@ html_content = f"""<!DOCTYPE html>
         }}
         .card {{
             background: #fff;
-            padding: 15px;
+            padding: 15px 8px;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
             margin-bottom: 20px;
@@ -104,7 +104,7 @@ html_content = f"""<!DOCTYPE html>
             margin-bottom: 15px;
         }}
         .tab-btn {{
-            padding: 10px 20px;
+            padding: 10px 18px;
             font-size: 0.95rem;
             font-weight: bold;
             border: none;
@@ -157,27 +157,33 @@ html_content = f"""<!DOCTYPE html>
             border-radius: 3px;
         }}
 
-        /* --- スクロール・Y軸固定用コンテナ設定 --- */
-        .chart-scroll-wrapper {{
-            position: relative;
+        /* --- 3カラム（Y軸両端固定）レイアウト構造 --- */
+        .chart-layout-wrapper {{
+            display: flex;
             width: 100%;
+            position: relative;
+            background: #fff;
+        }}
+        .yaxis-fixed-left {{
+            width: 55px;
+            flex-shrink: 0;
+            z-index: 10;
+            background: #fff;
+        }}
+        .yaxis-fixed-right {{
+            width: 55px;
+            flex-shrink: 0;
+            z-index: 10;
+            background: #fff;
+        }}
+        .chart-scroll-center {{
+            flex-grow: 1;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             touch-action: pan-x pan-y;
         }}
-        .chart-inner {{
-            position: relative;
+        .chart-inner-content {{
             min-width: 100%;
-        }}
-        #dailyChart, #monthlyChart {{
-            width: 100%;
-            height: 520px;
-            touch-action: pan-x pan-y;
-        }}
-        
-        /* StickyによるY軸表示維持 */
-        .plotly .ytick, .plotly .y2tick, .plotly .y-axis-title, .plotly .y2-axis-title {{
-            position: sticky !important;
         }}
 
         .tab-content {{
@@ -188,14 +194,14 @@ html_content = f"""<!DOCTYPE html>
         }}
 
         @media (max-width: 600px) {{
-            #dailyChart, #monthlyChart {{
-                height: 460px;
-            }}
             body {{
                 padding: 5px;
             }}
             .card {{
-                padding: 10px 5px;
+                padding: 10px 4px;
+            }}
+            .yaxis-fixed-left, .yaxis-fixed-right {{
+                width: 48px;
             }}
         }}
     </style>
@@ -228,8 +234,12 @@ html_content = f"""<!DOCTYPE html>
                     <label for="dateSelect"><strong>日付選択:</strong></label>
                     <select id="dateSelect" onchange="updateDailyChart()"></select>
                 </div>
-                <div class="chart-scroll-wrapper">
-                    <div id="dailyChart"></div>
+                <div class="chart-layout-wrapper">
+                    <div id="dailyYLeft" class="yaxis-fixed-left"></div>
+                    <div class="chart-scroll-center">
+                        <div id="dailyChartCenter" style="width: 100%; height: 460px;"></div>
+                    </div>
+                    <div id="dailyYRight" class="yaxis-fixed-right"></div>
                 </div>
             </div>
 
@@ -239,10 +249,14 @@ html_content = f"""<!DOCTYPE html>
                     <label for="monthSelect"><strong>年月選択:</strong></label>
                     <select id="monthSelect" onchange="updateMonthlyChart()"></select>
                 </div>
-                <div class="chart-scroll-wrapper">
-                    <div id="monthlyChartInner" class="chart-inner">
-                        <div id="monthlyChart"></div>
+                <div class="chart-layout-wrapper">
+                    <div id="monthlyYLeft" class="yaxis-fixed-left"></div>
+                    <div class="chart-scroll-center">
+                        <div id="monthlyChartInner" class="chart-inner-content">
+                            <div id="monthlyChartCenter" style="height: 460px;"></div>
+                        </div>
                     </div>
+                    <div id="monthlyYRight" class="yaxis-fixed-right"></div>
                 </div>
             </div>
 
@@ -255,18 +269,17 @@ html_content = f"""<!DOCTYPE html>
         const rawMonthlyData = {json_monthly_data};
         const months = {json_months};
 
-        // カラー定義（統一）
         const colors = {{
-            gen: '#2ecc71',      // 発電: 明るい緑
-            discharge: '#1e8449',// 放電: 深緑
-            buy: '#e74c3c',      // 買電: 赤
-            cons: '#e67e22',     // 消費: オレンジ
-            charge: '#3498db',   // 充電: 青
-            sell: '#8e44ad',     // 売電: 紫
-            soc: '#2c3e50'       // SOC: 紺
+            gen: '#2ecc71',
+            discharge: '#1e8449',
+            buy: '#e74c3c',
+            cons: '#e67e22',
+            charge: '#3498db',
+            sell: '#8e44ad',
+            soc: '#2c3e50'
         }};
 
-        // --- セレクトボックス初期化 ---
+        // セレクトボックス初期化
         const dateSelect = document.getElementById('dateSelect');
         dates.forEach(d => {{
             const opt = document.createElement('option');
@@ -283,7 +296,6 @@ html_content = f"""<!DOCTYPE html>
             monthSelect.appendChild(opt);
         }});
 
-        // --- タブ切り替えロジック ---
         function switchTab(tabName) {{
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
@@ -299,12 +311,58 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
+        // Y軸範囲算出ヘルパー関数
+        function getPowerRange(data) {{
+            let maxPos = 0;
+            let maxNeg = 0;
+            for (let i = 0; i < data.time.length; i++) {{
+                let posSum = (data.generation[i] || 0) + (data.discharging[i] || 0) + (data.buy[i] || 0);
+                let negSum = Math.abs((data.consumption[i] || 0) + (data.charging[i] || 0) + (data.sell[i] || 0));
+                if (posSum > maxPos) maxPos = posSum;
+                if (negSum > maxNeg) maxNeg = negSum;
+            }}
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 1.5) * 1.1 * 10) / 10;
+            return [-limit, limit];
+        }}
+
+        function getPowerRangeMonthly(data) {{
+            let maxPos = 0;
+            let maxNeg = 0;
+            for (let i = 0; i < data.datetime.length; i++) {{
+                let posSum = (data.generation[i] || 0) + (data.discharging[i] || 0) + (data.buy[i] || 0);
+                let negSum = Math.abs((data.consumption[i] || 0) + (data.charging[i] || 0) + (data.sell[i] || 0));
+                if (posSum > maxPos) maxPos = posSum;
+                if (negSum > maxNeg) maxNeg = negSum;
+            }}
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 1.5) * 1.1 * 10) / 10;
+            return [-limit, limit];
+        }}
+
         // --- 日次グラフ描画 ---
         function updateDailyChart() {{
             const selectedDate = dateSelect.value;
             const data = rawDailyData[selectedDate];
             if (!data) return;
 
+            const yRange = getPowerRange(data);
+
+            // 1. 左Y軸 (固定)
+            Plotly.newPlot('dailyYLeft', [], {{
+                margin: {{ t: 40, r: 0, l: 45, b: 80 }},
+                height: 460,
+                yaxis: {{ title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            // 2. 右Y軸 (固定)
+            Plotly.newPlot('dailyYRight', [], {{
+                margin: {{ t: 40, r: 45, l: 0, b: 80 }},
+                height: 460,
+                yaxis: {{ title: 'SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            // 3. 中央プロット領域 (グラフ本体)
             const traces = [
                 {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -316,35 +374,49 @@ html_content = f"""<!DOCTYPE html>
             ];
 
             const layout = {{
-                title: selectedDate + ' の電力バランス (30分粒度)',
-                margin: {{ t: 40, r: 50, l: 50, b: 80 }}, // 下部マージンを広げてラベル被りを防ぐ
+                title: selectedDate + ' (30分粒度)',
+                margin: {{ t: 40, r: 10, l: 10, b: 80 }},
+                height: 460,
                 showlegend: false,
-                dragmode: false, // プロット領域のドラッグによるズームを無効にしスワイプスクロールを優先
-                xaxis: {{ 
-                    title: '時刻',
-                    tickangle: -45, // ラベルを傾ける
-                    nticks: 24,     // ラベルが密集しないよう間引く
-                    fixedrange: true
-                }},
-                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
-                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false, fixedrange: true }},
+                dragmode: false,
+                xaxis: {{ title: '時刻', tickangle: -45, nticks: 24, fixedrange: true }},
+                yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
+                yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
                 barmode: 'relative',
                 autosize: true
             }};
 
-            Plotly.newPlot('dailyChart', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
+            Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
-        // --- 月次グラフ描画 (30分刻み・横スクロール対応) ---
+        // --- 月次グラフ描画 (30分刻み・横スクロール & Y軸固定) ---
         function updateMonthlyChart() {{
             const selectedMonth = monthSelect.value;
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            // データ数に応じて横幅を拡張（スクロール領域確保）
-            const minWidth = Math.max(1600, data.datetime.length * 12);
+            const minWidth = Math.max(1600, data.datetime.length * 11);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
+            const yRange = getPowerRangeMonthly(data);
+
+            // 1. 左Y軸 (固定)
+            Plotly.newPlot('monthlyYLeft', [], {{
+                margin: {{ t: 40, r: 0, l: 45, b: 90 }},
+                height: 460,
+                yaxis: {{ title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            // 2. 右Y軸 (固定)
+            Plotly.newPlot('monthlyYRight', [], {{
+                margin: {{ t: 40, r: 45, l: 0, b: 90 }},
+                height: 460,
+                yaxis: {{ title: 'SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            // 3. 中央プロット領域 (横スクロール対応)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -357,21 +429,17 @@ html_content = f"""<!DOCTYPE html>
 
             const layout = {{
                 title: selectedMonth + ' 月間電力バランス (30分刻み)',
-                margin: {{ t: 40, r: 50, l: 50, b: 90 }},
+                margin: {{ t: 40, r: 10, l: 10, b: 90 }},
+                height: 460,
                 showlegend: false,
                 dragmode: false,
-                xaxis: {{ 
-                    title: '日時 (MM/DD HH:MM)', 
-                    tickangle: -45,
-                    nticks: 31, // 日付単位で見やすく調整
-                    fixedrange: true
-                }},
-                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
-                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false, fixedrange: true }},
+                xaxis: {{ title: '日時 (MM/DD HH:MM)', tickangle: -45, nticks: 31, fixedrange: true }},
+                yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
+                yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
                 barmode: 'relative'
             }};
 
-            Plotly.newPlot('monthlyChart', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
+            Plotly.newPlot('monthlyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
         // 初期表示
@@ -384,4 +452,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("Y軸固定・スワイプスクロール・ラベル重なり防止を適用した index.html を生成しました！")
+print("Y軸完全固定・3カラム構成を適用した index.html を生成しました！")
