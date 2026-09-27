@@ -3,7 +3,6 @@ import json
 import os
 
 # 1. CSVファイルの読み込み
-# --- CSVファイル名の決定（環境変数 CSV_FILENAME があればそれを優先、無ければデフォルト） ---
 csv_path = os.environ.get('CSV_FILENAME', 'パワコン_2026.csv')
 if not os.path.exists(csv_path):
     print(f"Error: {csv_path} が見つかりません。")
@@ -23,22 +22,6 @@ df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
-# --- 1時間単位サマリー用の処理（月次グラフ用） ---
-df['日時_1h'] = df['日時'].dt.floor('h')
-
-df_1h = df.groupby('日時_1h').agg({
-    '発電電力量[kWh]': 'sum',
-    '消費電力量[kWh]': 'sum',
-    '売電電力量[kWh]': 'sum',
-    '買電電力量[kWh]': 'sum',
-    '充電電力量[kWh]': 'sum',
-    '放電電力量[kWh]': 'sum',
-    '蓄電残量(SOC)[%]': 'last'  # SOCは1時間の最後の値を採用
-}).reset_index()
-
-df_1h['年月'] = df_1h['日時_1h'].dt.strftime('%Y-%m')
-df_1h['日時_str'] = df_1h['日時_1h'].dt.strftime('%m/%d %H:00')
-
 # 2. JSONデータの作成
 
 # (A) 日次データ (30分粒度)
@@ -57,11 +40,11 @@ for date_str in dates:
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist()
     }
 
-# (B) 月次データ (1時間粒度)
-months = sorted(list(df_1h['年月'].unique()), reverse=True)
+# (B) 月次データ (30分粒度に変更)
+months = sorted(list(df['年月'].unique()), reverse=True)
 monthly_data = {}
 for month_str in months:
-    sub_df = df_1h[df_1h['年月'] == month_str]
+    sub_df = df[df['年月'] == month_str]
     monthly_data[month_str] = {
         'datetime': sub_df['日時_str'].tolist(),
         'generation': sub_df['発電電力量[kWh]'].tolist(),
@@ -85,6 +68,9 @@ html_content = f"""<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>太陽光発電 収支モニタリング</title>
+    <!-- スマホホーム画面用アイコン設定 (ライトモード対応) -->
+    <link rel="apple-touch-icon" href="solar_dashboard_icon_light.png">
+    <link rel="icon" type="image/png" href="solar_dashboard_icon_light.png">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
         body {{
@@ -147,9 +133,32 @@ html_content = f"""<!DOCTYPE html>
             border: 1px solid #ccc;
             background-color: #fff;
         }}
+        /* 外部共通凡例エリア（スクロールしても常に表示） */
+        .custom-legend {{
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8fafc;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: bold;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }}
+        .legend-color {{
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+        }}
         .chart-scroll-wrapper {{
             width: 100%;
-            overflow-x: auto; /* スクロール可能にする構造 */
+            overflow-x: auto;
             -webkit-overflow-scrolling: touch;
         }}
         .chart-inner {{
@@ -157,7 +166,7 @@ html_content = f"""<!DOCTYPE html>
         }}
         #dailyChart, #monthlyChart {{
             width: 100%;
-            height: 550px;
+            height: 520px;
         }}
         .tab-content {{
             display: none;
@@ -167,13 +176,17 @@ html_content = f"""<!DOCTYPE html>
         }}
         @media (max-width: 600px) {{
             #dailyChart, #monthlyChart {{
-                height: 480px;
+                height: 450px;
             }}
             body {{
                 padding: 8px;
             }}
             .card {{
                 padding: 10px;
+            }}
+            .custom-legend {{
+                font-size: 0.75rem;
+                gap: 8px;
             }}
         }}
     </style>
@@ -186,7 +199,18 @@ html_content = f"""<!DOCTYPE html>
             <!-- タブ切り替えボタン -->
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('daily')">日次 (24時間)</button>
-                <button class="tab-btn" onclick="switchTab('monthly')">月次 (31日間・1時間粒度)</button>
+                <button class="tab-btn" onclick="switchTab('monthly')">月次 (31日間・30分刻み)</button>
+            </div>
+
+            <!-- 常時表示される外部共通凡例 -->
+            <div class="custom-legend" id="sharedLegend">
+                <div class="legend-item"><div class="legend-color" style="background: #2ecc71;"></div>発電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #1e8449;"></div>放電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #e74c3c;"></div>買電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #e67e22;"></div>消費(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
             </div>
 
             <!-- 日次コンテンツ -->
@@ -282,11 +306,11 @@ html_content = f"""<!DOCTYPE html>
 
             const layout = {{
                 title: selectedDate + ' の電力バランス (30分粒度)',
-                margin: {{ t: 40, r: 50, l: 50, b: 60 }},
-                legend: {{ orientation: 'h', y: -0.25, x: 0.5, xanchor: 'center' }},
-                xaxis: {{ title: '時刻' }},
-                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
-                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false }},
+                margin: {{ t: 40, r: 50, l: 50, b: 40 }},
+                showlegend: false, // 外部共通凡例を使うため内蔵レジェンドは非表示
+                xaxis: {{ title: '時刻', fixedrange: true }}, // ズーム無効化
+                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
+                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false, fixedrange: true }},
                 barmode: 'relative',
                 autosize: true
             }};
@@ -294,14 +318,14 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyChart', traces, layout, {{ responsive: true, displayModeBar: false }});
         }}
 
-        // --- 月次グラフ描画 (横スクロール ＆ レンジスライダー対応) ---
+        // --- 月次グラフ描画 (30分刻み・横スクロール対応) ---
         function updateMonthlyChart() {{
             const selectedMonth = monthSelect.value;
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            // データ点数に応じた動的横幅（1点あたり約12px幅を確保して見やすく表示）
-            const minWidth = Math.max(1000, data.datetime.length * 14);
+            // 30分粒度（1日48コマ×31日＝最大約1488点）に合わせた動的横幅（1点あたり約10px）
+            const minWidth = Math.max(1200, data.datetime.length * 10);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
             const traces = [
@@ -309,22 +333,23 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
                 {{ x: data.datetime, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
                 {{ x: data.datetime, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
-                {{ x: data.datetime, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
+                {{ x: data.datetime, y: data.datetime ? data.charging : [], name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.datetime, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 2, shape: 'spline' }} }}
+                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.5 }} }}
             ];
 
             const layout = {{
-                title: selectedMonth + ' 月間電力バランス (1時間粒度)',
+                title: selectedMonth + ' 月間電力バランス (30分刻み)',
                 margin: {{ t: 40, r: 50, l: 50, b: 80 }},
-                legend: {{ orientation: 'h', y: -0.3, x: 0.5, xanchor: 'center' }},
+                showlegend: false, // 外部共通凡例を使うため非表示
                 xaxis: {{ 
-                    title: '日時 (MM/DD HH:00)', 
+                    title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
-                    rangeslider: {{ visible: true }} // 下部にミニナビゲーション用スライダーを追加
+                    fixedrange: true, // ズーム無効化
+                    rangeslider: {{ visible: true }} // 下部ミニナビゲーションスライダー
                 }},
-                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
-                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false }},
+                yaxis: {{ title: '電力量 [kWh]', side: 'left', zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
+                yaxis2: {{ title: '蓄電残量 (SOC) [%]', side: 'right', overlaying: 'y', range: [0, 100], showgrid: false, fixedrange: true }},
                 barmode: 'relative'
             }};
 
@@ -341,4 +366,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("月次タブ（1時間粒度・横スクロール）を追加した index.html を生成しました！")
+print("UI改善（ズーム無効化・30分刻み月次・外部固定凡例・アイコン設定）を適用した index.html を生成しました！")
