@@ -535,8 +535,8 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                bargap: 0.5,       # バー同士の間隔を広げて太さを半分に細らせる
-                bargroupgap: 0.1,  # グループ間の隙間調整
+                bargap: 0.5,       // バー同士の間隔を広げて太さを半分に細らせる
+                bargroupgap: 0.1,  // グループ間の隙間調整
                 xaxis: {{ 
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
@@ -563,4 +563,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("月次グラフのヒストグラムの太さを半分に調整した index.html を生成しました！")
+print("構文エラーを修正した index.html を正常に生成しました！")
