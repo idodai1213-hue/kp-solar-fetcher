@@ -10,8 +10,7 @@ LATITUDE = 35.333   # 多治見市の緯度 (北緯)
 LONGITUDE = 137.033 # 多治見市の経度 (東経)
 
 PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
-# 10:30(JST)の太陽方位に合致させるため、157.5° -> 142.0°(東南東寄り) に補正
-PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (南:180°, 東:90°)
+PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピークに補正)
 
 def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
     """
@@ -509,7 +508,7 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域
+            // 3. 中央プロット領域 (月次のバーの太さを約半分に調整)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -536,6 +535,8 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
+                bargap: 0.5,       # バー同士の間隔を広げて太さを半分に細らせる
+                bargroupgap: 0.1,  # グループ間の隙間調整
                 xaxis: {{ 
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
@@ -562,4 +563,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("10:30ピーク補正および受光強度(50〜100スケール)を反映した index.html を生成しました！")
+print("月次グラフのヒストグラムの太さを半分に調整した index.html を生成しました！")
