@@ -487,7 +487,8 @@ html_content = f"""<!DOCTYPE html>
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            const minWidth = Math.max(2400, data.datetime.length * 15);
+            // 1データ点あたり約7.5pxに設定（データ数に応じて詰める）
+            const minWidth = Math.max(1200, data.datetime.length * 7.5);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
             const yRange = getPowerRangeMonthly(data);
@@ -508,7 +509,7 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域 (月次のバーの太さを約半分に調整)
+            // 3. 中央プロット領域 (間隔を詰めてコンパクトに配置)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -535,13 +536,13 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                bargap: 0.5,       // バー同士の間隔を広げて太さを半分に細らせる
-                bargroupgap: 0.1,  // グループ間の隙間調整
+                bargap: 0.15,      // 棒同士の間隔を15%に抑えて詰める
+                bargroupgap: 0,
                 xaxis: {{ 
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
                     type: 'date',
-                    dtick: 2 * 3600 * 1000,
+                    dtick: 6 * 3600 * 1000, // 6時間ごとに目盛りを表示してスッキリさせる
                     tickformat: '%m/%d %H:%M',
                     fixedrange: true
                 }},
@@ -563,4 +564,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("構文エラーを修正した index.html を正常に生成しました！")
+print("月次グラフの間隔を詰めた index.html を正常に生成しました！")
