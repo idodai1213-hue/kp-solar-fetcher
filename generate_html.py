@@ -4,20 +4,20 @@ import os
 import math
 
 # ---------------------------------------------------------
-# 太陽高度角（仰角）計算関数 (多治見市)
+# 太陽高度角（仰角）計算・スケール変換関数 (多治見市)
 # ---------------------------------------------------------
 LATITUDE = 35.333   # 多治見市の緯度 (北緯)
 LONGITUDE = 137.033 # 多治見市の経度 (東経)
 
-def calculate_solar_elevation(dt, lat=LATITUDE, lon=LONGITUDE):
+def calculate_solar_elevation_scaled(dt, lat=LATITUDE, lon=LONGITUDE):
     """
-    指定された日時(dt: datetimeオブジェクト)における太陽の仰角[度]を計算する。
+    指定された日時(dt: datetimeオブジェクト)における太陽の仰角[度]を計算し、
+    -90°〜90° を 0〜100 のスケール（0°=50, 90°=100, -90°=0）に変換して返す。
     """
     # 年間の通日 (Day of Year)
     day_of_year = dt.timetuple().tm_yday
     
     # 太陽赤緯 (Declination) [rad]
-    # 近似式: 23.45 * sin(360/365 * (284 + N))
     declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
     declination_rad = math.radians(declination_deg)
     
@@ -26,33 +26,30 @@ def calculate_solar_elevation(dt, lat=LATITUDE, lon=LONGITUDE):
     eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
     
     # 地方時と時角 (Hour Angle) [rad]
-    # 日本標準時(JST)の標準子午線は 東経135度
-    lstm = 135.0
-    time_offset = 4.0 * (lon - lstm) + eot  # 分単位の補正
+    lstm = 135.0  # 日本標準時(JST)
+    time_offset = 4.0 * (lon - lstm) + eot
     
-    # 真太陽時 (Solar Time) [時間]
     time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
     solar_time_hours = time_hours + time_offset / 60.0
     
-    # 時角 (Hour Angle) : 正午を0度とし、1時間＝15度
     hour_angle_deg = (solar_time_hours - 12.0) * 15.0
     hour_angle_rad = math.radians(hour_angle_deg)
     
-    # 緯度のラジアン変換
     lat_rad = math.radians(lat)
     
     # 太陽高度角の正弦 (sin(h))
     sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
                      math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
     
-    # -1 <= sin_elevation <= 1 の範囲にクランプ
     sin_elevation = max(-1.0, min(1.0, sin_elevation))
     
-    # 仰角 (度)
+    # 仰角 (度) : 夜間のマイナス値も保持
     elevation_deg = math.degrees(math.asin(sin_elevation))
     
-    # 地平線以下（マイナス値）は 0 度として扱う（昼間のみ正の値）
-    return max(0.0, round(elevation_deg, 2))
+    # スケール補正 (-90° -> 0, 0° -> 50, 90° -> 100)
+    scaled_value = (elevation_deg + 90.0) / 1.8
+    
+    return round(scaled_value, 2)
 
 
 # 1. CSVファイルの読み込み
@@ -75,8 +72,8 @@ df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
-# 太陽仰角の計算
-df['仰角'] = df['日時'].apply(calculate_solar_elevation)
+# 太陽仰角（スケール補正済み）の計算
+df['仰角'] = df['日時'].apply(calculate_solar_elevation_scaled)
 
 
 # 2. JSONデータの作成
@@ -285,7 +282,7 @@ html_content = f"""<!DOCTYPE html>
                 <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>太陽仰角[°]</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>太陽仰角 (0°=50)</div>
             </div>
 
             <!-- 日次コンテンツ -->
@@ -419,7 +416,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 80 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%] / 仰角 [°]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC [%] / 仰角スケール', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
@@ -432,7 +429,16 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
                 {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }},
-                {{ x: data.time, y: data.elevation, name: '太陽仰角[°]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.elevation, width: 2, dash: 'dot' }} }}
+                {{ 
+                    x: data.time, 
+                    y: data.elevation, 
+                    name: '太陽仰角', 
+                    type: 'scatter', 
+                    mode: 'lines', 
+                    yaxis: 'y2', 
+                    line: {{ color: colors.elevation, width: 2, dash: 'dot' }},
+                    hovertemplate: '%{{x}}<br>仰角補正値: %{{y}}<extra></extra>'
+                }}
             ];
 
             const layout = {{
@@ -474,7 +480,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('monthlyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 90 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%] / 仰角 [°]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC [%] / 仰角スケール', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
@@ -487,7 +493,16 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.datetime, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.datetime, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
                 {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.5 }} }},
-                {{ x: data.datetime, y: data.elevation, name: '太陽仰角[°]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.elevation, width: 1.5, dash: 'dot' }} }}
+                {{ 
+                    x: data.datetime, 
+                    y: data.elevation, 
+                    name: '太陽仰角', 
+                    type: 'scatter', 
+                    mode: 'lines', 
+                    yaxis: 'y2', 
+                    line: {{ color: colors.elevation, width: 1.5, dash: 'dot' }},
+                    hovertemplate: '%{{x}}<br>仰角補正値: %{{y}}<extra></extra>'
+                }}
             ];
 
             const layout = {{
@@ -522,4 +537,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("太陽仰角の計算ロジックを組み込んだ index.html を再生成しました！")
+print("仰角を 0°=50, 90°=100, -90°=0 に補正した index.html を再生成しました！")
