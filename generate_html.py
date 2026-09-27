@@ -4,19 +4,20 @@ import os
 import math
 
 # ---------------------------------------------------------
-# 太陽位置およびパネル受光強度計算関数 (多治見市 / 南南東 / 傾斜25度)
+# 太陽位置およびパネル受光強度計算関数 (多治見市 / 10:30ピーク補正 / 傾斜25度)
 # ---------------------------------------------------------
 LATITUDE = 35.333   # 多治見市の緯度 (北緯)
 LONGITUDE = 137.033 # 多治見市の経度 (東経)
 
 PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
-PANEL_AZIMUTH_DEG = 157.5   # パネルの方位角 [度] (南:180°, 南南東:157.5°)
+# 10:30(JST)の太陽方位に合致させるため、157.5° -> 142.0°(東南東寄り) に補正
+PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (南:180°, 東:90°)
 
 def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
     """
-    指定日時の太陽位置（高度角・方位角）から、南南東・25度傾斜パネルへの受光強度(0〜100)を算出する。
-    100 = パネル面に完全に垂直に光が射し込む（最大効率）
-    0   = 夜間またはパネルの裏側に太陽がある状態
+    指定日時の太陽位置（高度角・方位角）から受光強度を算出する。
+    10:30に最大となるようにパネル方位角を調整し、
+    受光強度 0 が目盛りの 50 (範囲: 50〜100) になるように補正。
     """
     day_of_year = dt.timetuple().tm_yday
     
@@ -46,34 +47,34 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     elevation_rad = math.asin(sin_elevation)
     elevation_deg = math.degrees(elevation_rad)
     
-    # 太陽が地平線下にある場合は 0
+    # 太陽が地平線下にある場合は 基礎スコア 0
     if elevation_deg <= 0:
-        return 0.0
+        raw_score = 0.0
+    else:
+        # 5. 太陽方位角 (Azimuth: 北=0, 東=90, 南=180, 西=270)
+        cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
+                       math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(elevation_rad)
+        cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
         
-    # 5. 太陽方位角 (Azimuth: 北=0, 東=90, 南=180, 西=270)
-    cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
-                   math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(elevation_rad)
-    cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
-    
-    azimuth_rad = math.acos(cos_azimuth)
-    if hour_angle_deg > 0:
-        azimuth_rad = 2 * math.pi - azimuth_rad
-    solar_azimuth_deg = math.degrees(azimuth_rad)
-    
-    # 6. 面受光角の計算 (パネル法線と太陽光線のベクトル内積)
-    tilt_rad = math.radians(tilt)
-    panel_azimuth_rad = math.radians(panel_azimuth)
-    
-    cos_incidence = (math.sin(elevation_rad) * math.cos(tilt_rad) + 
-                     math.cos(elevation_rad) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
-                     
-    # 裏から光が入るか地表下なら 0 に丸める
-    if cos_incidence < 0:
-        cos_incidence = 0.0
+        azimuth_rad = math.acos(cos_azimuth)
+        if hour_angle_deg > 0:
+            azimuth_rad = 2 * math.pi - azimuth_rad
         
-    # 0〜100 のスケール値に変換
-    score = cos_incidence * 100.0
-    return round(score, 2)
+        # 6. 面受光角の計算 (パネル法線と太陽光線のベクトル内積)
+        tilt_rad = math.radians(tilt)
+        panel_azimuth_rad = math.radians(panel_azimuth)
+        
+        cos_incidence = (math.sin(elevation_rad) * math.cos(tilt_rad) + 
+                         math.cos(elevation_rad) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
+                         
+        if cos_incidence < 0:
+            cos_incidence = 0.0
+            
+        raw_score = cos_incidence * 100.0
+
+    # 【受光強度0を目盛り50にする補正】 ( raw_score: 0〜100 -> 50〜100 )
+    adjusted_score = 50.0 + (raw_score * 0.5)
+    return round(adjusted_score, 2)
 
 
 # 1. CSVファイルの読み込み
@@ -306,7 +307,7 @@ html_content = f"""<!DOCTYPE html>
                 <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>受光強度(南南東/25°)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>受光強度(10:30ピーク/25°)</div>
             </div>
 
             <!-- 日次コンテンツ -->
@@ -561,4 +562,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("多治見市・南南東・25度傾斜パネルへの受光強度を反映した index.html を生成しました！")
+print("10:30ピーク補正および受光強度(50〜100スケール)を反映した index.html を生成しました！")
