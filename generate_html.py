@@ -1,6 +1,59 @@
 import pandas as pd
 import json
 import os
+import math
+
+# ---------------------------------------------------------
+# 太陽高度角（仰角）計算関数 (多治見市)
+# ---------------------------------------------------------
+LATITUDE = 35.333   # 多治見市の緯度 (北緯)
+LONGITUDE = 137.033 # 多治見市の経度 (東経)
+
+def calculate_solar_elevation(dt, lat=LATITUDE, lon=LONGITUDE):
+    """
+    指定された日時(dt: datetimeオブジェクト)における太陽の仰角[度]を計算する。
+    """
+    # 年間の通日 (Day of Year)
+    day_of_year = dt.timetuple().tm_yday
+    
+    # 太陽赤緯 (Declination) [rad]
+    # 近似式: 23.45 * sin(360/365 * (284 + N))
+    declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
+    declination_rad = math.radians(declination_deg)
+    
+    # 均時差 (Equation of Time) [分]
+    b = math.radians((360 / 365.0) * (day_of_year - 81))
+    eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
+    
+    # 地方時と時角 (Hour Angle) [rad]
+    # 日本標準時(JST)の標準子午線は 東経135度
+    lstm = 135.0
+    time_offset = 4.0 * (lon - lstm) + eot  # 分単位の補正
+    
+    # 真太陽時 (Solar Time) [時間]
+    time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+    solar_time_hours = time_hours + time_offset / 60.0
+    
+    # 時角 (Hour Angle) : 正午を0度とし、1時間＝15度
+    hour_angle_deg = (solar_time_hours - 12.0) * 15.0
+    hour_angle_rad = math.radians(hour_angle_deg)
+    
+    # 緯度のラジアン変換
+    lat_rad = math.radians(lat)
+    
+    # 太陽高度角の正弦 (sin(h))
+    sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
+                     math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
+    
+    # -1 <= sin_elevation <= 1 の範囲にクランプ
+    sin_elevation = max(-1.0, min(1.0, sin_elevation))
+    
+    # 仰角 (度)
+    elevation_deg = math.degrees(math.asin(sin_elevation))
+    
+    # 地平線以下（マイナス値）は 0 度として扱う（昼間のみ正の値）
+    return max(0.0, round(elevation_deg, 2))
+
 
 # 1. CSVファイルの読み込み
 csv_path = os.environ.get('CSV_FILENAME', 'パワコン_2026.csv')
@@ -22,6 +75,10 @@ df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
+# 太陽仰角の計算
+df['仰角'] = df['日時'].apply(calculate_solar_elevation)
+
+
 # 2. JSONデータの作成
 
 # (A) 日次データ (30分粒度)
@@ -37,7 +94,8 @@ for date_str in dates:
         'consumption': (-sub_df['消費電力量[kWh]']).tolist(),
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
-        'soc': sub_df['蓄電残量(SOC)[%]'].tolist()
+        'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
+        'elevation': sub_df['仰角'].tolist()
     }
 
 # (B) 月次データ (30分粒度)
@@ -53,7 +111,8 @@ for month_str in months:
         'consumption': (-sub_df['消費電力量[kWh]']).tolist(),
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
-        'soc': sub_df['蓄電残量(SOC)[%]'].tolist()
+        'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
+        'elevation': sub_df['仰角'].tolist()
     }
 
 json_daily_data = json.dumps(daily_data, ensure_ascii=False)
@@ -226,6 +285,7 @@ html_content = f"""<!DOCTYPE html>
                 <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>太陽仰角[°]</div>
             </div>
 
             <!-- 日次コンテンツ -->
@@ -276,7 +336,8 @@ html_content = f"""<!DOCTYPE html>
             cons: '#e67e22',
             charge: '#3498db',
             sell: '#8e44ad',
-            soc: '#2c3e50'
+            soc: '#2c3e50',
+            elevation: '#f39c12'
         }};
 
         // セレクトボックス初期化
@@ -358,7 +419,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 80 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC [%] / 仰角 [°]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
@@ -370,7 +431,8 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.time, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
                 {{ x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }}
+                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }},
+                {{ x: data.time, y: data.elevation, name: '太陽仰角[°]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.elevation, width: 2, dash: 'dot' }} }}
             ];
 
             const layout = {{
@@ -395,7 +457,6 @@ html_content = f"""<!DOCTYPE html>
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            // 2時間刻みのラベルが綺麗に並ぶよう適切な横幅（1コマ15px程度）を確保
             const minWidth = Math.max(2400, data.datetime.length * 15);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
@@ -413,7 +474,7 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('monthlyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 90 }},
                 height: 460,
-                yaxis: {{ title: 'SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: 'SOC [%] / 仰角 [°]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
@@ -425,7 +486,8 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.datetime, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
                 {{ x: data.datetime, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.datetime, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.5 }} }}
+                {{ x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.soc, width: 1.5 }} }},
+                {{ x: data.datetime, y: data.elevation, name: '太陽仰角[°]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: colors.elevation, width: 1.5, dash: 'dot' }} }}
             ];
 
             const layout = {{
@@ -438,7 +500,7 @@ html_content = f"""<!DOCTYPE html>
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
                     type: 'date',
-                    dtick: 2 * 3600 * 1000, // 2時間単位 (ミリ秒指定)
+                    dtick: 2 * 3600 * 1000,
                     tickformat: '%m/%d %H:%M',
                     fixedrange: true
                 }},
@@ -460,4 +522,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("月次グラフのX軸ラベルを2時間単位に変更した index.html を再生成しました！")
+print("太陽仰角の計算ロジックを組み込んだ index.html を再生成しました！")
