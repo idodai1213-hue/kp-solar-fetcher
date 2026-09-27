@@ -389,13 +389,14 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
-        // --- 月次グラフ描画 (30分刻み・横スクロール & Y軸固定) ---
+        // --- 月次グラフ描画 (30分刻み・2時間単位ラベル) ---
         function updateMonthlyChart() {{
             const selectedMonth = monthSelect.value;
             const data = rawMonthlyData[selectedMonth];
             if (!data) return;
 
-            const minWidth = Math.max(1600, data.datetime.length * 11);
+            // 2時間刻みのラベルが綺麗に並ぶよう適切な横幅（1コマ15px程度）を確保
+            const minWidth = Math.max(2400, data.datetime.length * 15);
             document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
 
             const yRange = getPowerRangeMonthly(data);
@@ -416,7 +417,7 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域 (横スクロール対応)
+            // 3. 中央プロット領域 (2時間間隔のX軸ラベル指定)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -433,7 +434,14 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                xaxis: {{ title: '日時 (MM/DD HH:MM)', tickangle: -45, nticks: 31, fixedrange: true }},
+                xaxis: {{ 
+                    title: '日時 (MM/DD HH:MM)', 
+                    tickangle: -45,
+                    type: 'date',
+                    dtick: 2 * 3600 * 1000, // 2時間単位 (ミリ秒指定)
+                    tickformat: '%m/%d %H:%M',
+                    fixedrange: true
+                }},
                 yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
                 yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
                 barmode: 'relative'
@@ -452,4 +460,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("Y軸完全固定・3カラム構成を適用した index.html を生成しました！")
+print("月次グラフのX軸ラベルを2時間単位に変更した index.html を再生成しました！")
