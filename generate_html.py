@@ -4,31 +4,29 @@ import os
 import math
 
 # ---------------------------------------------------------
-# 太陽位置およびパネル受光強度計算関数 (多治見市 / 10:30ピーク補正 / 傾斜25度)
+# 定数・単価設定 (必要に応じて変更してください)
 # ---------------------------------------------------------
+BUY_PRICE_PER_KWH = 31.0  # 買電単価 [円/kWh]
+SELL_PRICE_PER_KWH = 16.0 # 売電単価 [円/kWh]
+
 LATITUDE = 35.333   # 多治見市の緯度 (北緯)
 LONGITUDE = 137.033 # 多治見市の経度 (東経)
 
 PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
 PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピークに補正)
 
+# ---------------------------------------------------------
+# 太陽位置およびパネル受光強度計算関数
+# ---------------------------------------------------------
 def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
-    """
-    指定日時の太陽位置（高度角・方位角）から受光強度を算出する。
-    10:30に最大となるようにパネル方位角を調整し、
-    受光強度 0 が目盛りの 50 (範囲: 50〜100) になるように補正。
-    """
     day_of_year = dt.timetuple().tm_yday
     
-    # 1. 太陽赤緯 [rad]
     declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
     declination_rad = math.radians(declination_deg)
     
-    # 2. 均時差 [分]
     b = math.radians((360 / 365.0) * (day_of_year - 81))
     eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
     
-    # 3. 時角 [rad]
     lstm = 135.0  # 日本標準時 (JST)
     time_offset = 4.0 * (lon - lstm) + eot
     time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
@@ -39,18 +37,15 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     
     lat_rad = math.radians(lat)
     
-    # 4. 太陽高度角 (Elevation)
     sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
                      math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
     sin_elevation = max(-1.0, min(1.0, sin_elevation))
     elevation_rad = math.asin(sin_elevation)
     elevation_deg = math.degrees(elevation_rad)
     
-    # 太陽が地平線下にある場合は 基礎スコア 0
     if elevation_deg <= 0:
         raw_score = 0.0
     else:
-        # 5. 太陽方位角 (Azimuth: 北=0, 東=90, 南=180, 西=270)
         cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
                        math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(elevation_rad)
         cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
@@ -59,7 +54,6 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
         if hour_angle_deg > 0:
             azimuth_rad = 2 * math.pi - azimuth_rad
         
-        # 6. 面受光角の計算 (パネル法線と太陽光線のベクトル内積)
         tilt_rad = math.radians(tilt)
         panel_azimuth_rad = math.radians(panel_azimuth)
         
@@ -71,7 +65,6 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
             
         raw_score = cos_incidence * 100.0
 
-    # 【受光強度0を目盛り50にする補正】 ( raw_score: 0〜100 -> 50〜100 )
     adjusted_score = 50.0 + (raw_score * 0.5)
     return round(adjusted_score, 2)
 
@@ -100,13 +93,22 @@ df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
 
-# 2. JSONデータの作成
+# 2. JSONデータの作成および料金・電力量サマリー計算
 
-# (A) 日次データ (30分粒度)
+# (A) 日次データ
 dates = sorted(list(df['日付'].unique()), reverse=True)
 daily_data = {}
 for date_str in dates:
     sub_df = df[df['日付'] == date_str]
+    
+    gen_sum = sub_df['発電電力量[kWh]'].sum()
+    buy_sum = sub_df['買電電力量[kWh]'].sum()
+    sell_sum = sub_df['売電電力量[kWh]'].sum()
+    cons_sum = sub_df['消費電力量[kWh]'].sum()
+    
+    # 自給率 = (消費量 - 買電量) / 消費量 * 100
+    self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
+    
     daily_data[date_str] = {
         'time': sub_df['時刻_str'].tolist(),
         'generation': sub_df['発電電力量[kWh]'].tolist(),
@@ -116,14 +118,31 @@ for date_str in dates:
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
-        'elevation': sub_df['仰角'].tolist()
+        'elevation': sub_df['仰角'].tolist(),
+        'summary': {
+            'gen': round(gen_sum, 2),
+            'buy': round(buy_sum, 2),
+            'sell': round(sell_sum, 2),
+            'cons': round(cons_sum, 2),
+            'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
+            'buy_cost': round(buy_sum * BUY_PRICE_PER_KWH),
+            'sell_income': round(sell_sum * SELL_PRICE_PER_KWH)
+        }
     }
 
-# (B) 月次データ (30分粒度)
+# (B) 月次データ
 months = sorted(list(df['年月'].unique()), reverse=True)
 monthly_data = {}
 for month_str in months:
     sub_df = df[df['年月'] == month_str]
+    
+    gen_sum = sub_df['発電電力量[kWh]'].sum()
+    buy_sum = sub_df['買電電力量[kWh]'].sum()
+    sell_sum = sub_df['売電電力量[kWh]'].sum()
+    cons_sum = sub_df['消費電力量[kWh]'].sum()
+    
+    self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
+    
     monthly_data[month_str] = {
         'datetime': sub_df['日時_str'].tolist(),
         'generation': sub_df['発電電力量[kWh]'].tolist(),
@@ -133,7 +152,16 @@ for month_str in months:
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
-        'elevation': sub_df['仰角'].tolist()
+        'elevation': sub_df['仰角'].tolist(),
+        'summary': {
+            'gen': round(gen_sum, 1),
+            'buy': round(buy_sum, 1),
+            'sell': round(sell_sum, 1),
+            'cons': round(cons_sum, 1),
+            'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
+            'buy_cost': round(buy_sum * BUY_PRICE_PER_KWH),
+            'sell_income': round(sell_sum * SELL_PRICE_PER_KWH)
+        }
     }
 
 json_daily_data = json.dumps(daily_data, ensure_ascii=False)
@@ -148,7 +176,6 @@ html_content = f"""<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>太陽光発電 収支モニタリング</title>
-    <!-- スマホホーム画面用アイコン設定 -->
     <link rel="apple-touch-icon" href="solar_dashboard_icon_light.png">
     <link rel="icon" type="image/png" href="solar_dashboard_icon_light.png">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -213,7 +240,45 @@ html_content = f"""<!DOCTYPE html>
             border: 1px solid #ccc;
             background-color: #fff;
         }}
-        /* 外部共通凡例エリア */
+
+        /* サマリーテーブル用スタイル */
+        .summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }}
+        .summary-card {{
+            background: #ffffff;
+            padding: 8px 10px;
+            border-radius: 6px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }}
+        .summary-card .label {{
+            font-size: 0.75rem;
+            color: #64748b;
+            font-weight: bold;
+            margin-bottom: 2px;
+        }}
+        .summary-card .val {{
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #1e293b;
+        }}
+        .summary-card .sub-val {{
+            font-size: 0.75rem;
+            color: #e74c3c;
+            font-weight: bold;
+        }}
+        .summary-card .sub-val.income {{
+            color: #2ecc71;
+        }}
+
         .custom-legend {{
             display: flex;
             flex-wrap: wrap;
@@ -237,7 +302,6 @@ html_content = f"""<!DOCTYPE html>
             border-radius: 3px;
         }}
 
-        /* --- 3カラム（Y軸両端固定）レイアウト構造 --- */
         .chart-layout-wrapper {{
             display: flex;
             width: 100%;
@@ -274,15 +338,11 @@ html_content = f"""<!DOCTYPE html>
         }}
 
         @media (max-width: 600px) {{
-            body {{
-                padding: 5px;
-            }}
-            .card {{
-                padding: 10px 4px;
-            }}
-            .yaxis-fixed-left, .yaxis-fixed-right {{
-                width: 48px;
-            }}
+            body {{ padding: 5px; }}
+            .card {{ padding: 10px 4px; }}
+            .yaxis-fixed-left, .yaxis-fixed-right {{ width: 48px; }}
+            .summary-grid {{ grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px; }}
+            .summary-card .val {{ font-size: 0.95rem; }}
         }}
     </style>
 </head>
@@ -291,13 +351,11 @@ html_content = f"""<!DOCTYPE html>
         <div class="card">
             <h1>☀️ 太陽光発電 収支ダッシュボード</h1>
             
-            <!-- タブ切り替えボタン -->
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('daily')">日次 (24時間)</button>
                 <button class="tab-btn" onclick="switchTab('monthly')">月次 (31日間・30分刻み)</button>
             </div>
 
-            <!-- 常時表示される外部共通凡例 -->
             <div class="custom-legend" id="sharedLegend">
                 <div class="legend-item"><div class="legend-color" style="background: #2ecc71;"></div>発電(+)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #1e8449;"></div>放電(+)</div>
@@ -315,6 +373,10 @@ html_content = f"""<!DOCTYPE html>
                     <label for="dateSelect"><strong>日付選択:</strong></label>
                     <select id="dateSelect" onchange="updateDailyChart()"></select>
                 </div>
+                
+                <!-- 日次サマリーテーブル -->
+                <div class="summary-grid" id="dailySummary"></div>
+
                 <div class="chart-layout-wrapper">
                     <div id="dailyYLeft" class="yaxis-fixed-left"></div>
                     <div class="chart-scroll-center">
@@ -330,6 +392,10 @@ html_content = f"""<!DOCTYPE html>
                     <label for="monthSelect"><strong>年月選択:</strong></label>
                     <select id="monthSelect" onchange="updateMonthlyChart()"></select>
                 </div>
+
+                <!-- 月次サマリーテーブル -->
+                <div class="summary-grid" id="monthlySummary"></div>
+
                 <div class="chart-layout-wrapper">
                     <div id="monthlyYLeft" class="yaxis-fixed-left"></div>
                     <div class="chart-scroll-center">
@@ -361,7 +427,6 @@ html_content = f"""<!DOCTYPE html>
             elevation: '#f39c12'
         }};
 
-        // セレクトボックス初期化
         const dateSelect = document.getElementById('dateSelect');
         dates.forEach(d => {{
             const opt = document.createElement('option');
@@ -393,7 +458,35 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
-        // Y軸範囲算出ヘルパー関数
+        // サマリー描画関数
+        function renderSummary(containerId, summary) {{
+            const el = document.getElementById(containerId);
+            el.innerHTML = `
+                <div class="summary-card">
+                    <div class="label">総発電量</div>
+                    <div class="val" style="color: #2ecc71;">${{summary.gen.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">総消費量</div>
+                    <div class="val" style="color: #e67e22;">${{summary.cons.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">買電量 (概算電気代)</div>
+                    <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                    <div class="sub-val">¥${{summary.buy_cost.toLocaleString()}}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">売電量 (売電収入)</div>
+                    <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                    <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">電力自給率</div>
+                    <div class="val" style="color: #3498db;">${{summary.self_ratio}}%</div>
+                </div>
+            `;
+        }}
+
         function getPowerRange(data) {{
             let maxPos = 0;
             let maxNeg = 0;
@@ -420,15 +513,16 @@ html_content = f"""<!DOCTYPE html>
             return [-limit, limit];
         }}
 
-        // --- 日次グラフ描画 ---
+        // 日次グラフ描画
         function updateDailyChart() {{
             const selectedDate = dateSelect.value;
             const data = rawDailyData[selectedDate];
             if (!data) return;
 
+            renderSummary('dailySummary', data.summary);
+
             const yRange = getPowerRange(data);
 
-            // 1. 左Y軸 (固定)
             Plotly.newPlot('dailyYLeft', [], {{
                 margin: {{ t: 40, r: 0, l: 45, b: 80 }},
                 height: 460,
@@ -436,7 +530,6 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 2. 右Y軸 (固定)
             Plotly.newPlot('dailyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 80 }},
                 height: 460,
@@ -444,72 +537,6 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            // 3. 中央プロット領域 (グラフ本体)
-            const traces = [
-                {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
-                {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
-                {{ x: data.time, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
-                {{ x: data.time, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
-                {{ x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
-                {{ x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }},
-                {{ 
-                    x: data.time, 
-                    y: data.elevation, 
-                    name: '受光強度', 
-                    type: 'scatter', 
-                    mode: 'lines', 
-                    yaxis: 'y2', 
-                    line: {{ color: colors.elevation, width: 2, dash: 'dot' }},
-                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
-                }}
-            ];
-
-            const layout = {{
-                title: selectedDate + ' (30分粒度)',
-                margin: {{ t: 40, r: 10, l: 10, b: 80 }},
-                height: 460,
-                showlegend: false,
-                dragmode: false,
-                xaxis: {{ title: '時刻', tickangle: -45, nticks: 24, fixedrange: true }},
-                yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
-                yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
-                barmode: 'relative',
-                autosize: true
-            }};
-
-            Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
-        }}
-
-        // --- 月次グラフ描画 ---
-        function updateMonthlyChart() {{
-            const selectedMonth = monthSelect.value;
-            const data = rawMonthlyData[selectedMonth];
-            if (!data) return;
-
-            // 1データ点あたり5.625px（7.5pxから25%削減してさらに詰める）
-            const minWidth = Math.max(900, data.datetime.length * 5.625);
-            document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
-
-            const yRange = getPowerRangeMonthly(data);
-
-            // 1. 左Y軸 (固定)
-            Plotly.newPlot('monthlyYLeft', [], {{
-                margin: {{ t: 40, r: 0, l: 45, b: 90 }},
-                height: 460,
-                yaxis: {{ title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
-                xaxis: {{ visible: false, fixedrange: true }}
-            }}, {{ displayModeBar: false }});
-
-            // 2. 右Y軸 (固定)
-            Plotly.newPlot('monthlyYRight', [], {{
-                margin: {{ t: 40, r: 45, l: 0, b: 90 }},
-                height: 460,
-                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
-                xaxis: {{ visible: false, fixedrange: true }}
-            }}, {{ displayModeBar: false }});
-
-            // 3. 中央プロット領域 (幅縮小に伴いバーも25%細く描画)
             const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -536,13 +563,13 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                bargap: 0.15,      // 間隔比率は維持（全体幅が縮むため棒自体も自動的に25%細くなります）
+                bargap: 0.15,
                 bargroupgap: 0,
                 xaxis: {{ 
                     title: '日時 (MM/DD HH:MM)', 
                     tickangle: -45,
                     type: 'date',
-                    dtick: 6 * 3600 * 1000, // 6時間ごとの目盛り
+                    dtick: 6 * 3600 * 1000,
                     tickformat: '%m/%d %H:%M',
                     fixedrange: true
                 }},
@@ -554,7 +581,6 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('monthlyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
-        // 初期表示
         if (dates.length > 0) updateDailyChart();
     </script>
 </body>
@@ -564,4 +590,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("月次グラフをさらに25%縮小・縮小した index.html を生成しました！")
+print("料金計算と概算サマリーテーブルを追加した index.html を生成しました！")
