@@ -106,7 +106,6 @@ for date_str in dates:
     sell_sum = sub_df['売電電力量[kWh]'].sum()
     cons_sum = sub_df['消費電力量[kWh]'].sum()
     
-    # 自給率 = (消費量 - 買電量) / 消費量 * 100
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
     
     daily_data[date_str] = {
@@ -241,10 +240,10 @@ html_content = f"""<!DOCTYPE html>
             background-color: #fff;
         }}
 
-        /* サマリーテーブル用スタイル */
+        /* サマリーテーブル用スタイル (PC: 横5列) */
         .summary-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            grid-template-columns: repeat(5, 1fr);
             gap: 8px;
             margin-bottom: 15px;
             padding: 10px;
@@ -254,19 +253,23 @@ html_content = f"""<!DOCTYPE html>
         }}
         .summary-card {{
             background: #ffffff;
-            padding: 8px 10px;
+            padding: 8px 6px;
             border-radius: 6px;
             text-align: center;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }}
         .summary-card .label {{
             font-size: 0.75rem;
             color: #64748b;
             font-weight: bold;
             margin-bottom: 2px;
+            white-space: nowrap;
         }}
         .summary-card .val {{
-            font-size: 1.1rem;
+            font-size: 1.05rem;
             font-weight: bold;
             color: #1e293b;
         }}
@@ -337,11 +340,25 @@ html_content = f"""<!DOCTYPE html>
             display: block;
         }}
 
+        /* スマホ用レイアウト (上段3つ / 下段2つ) */
         @media (max-width: 600px) {{
             body {{ padding: 5px; }}
             .card {{ padding: 10px 4px; }}
             .yaxis-fixed-left, .yaxis-fixed-right {{ width: 48px; }}
-            .summary-grid {{ grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px; }}
+            
+            .summary-grid {{
+                grid-template-columns: repeat(6, 1fr);
+                gap: 6px;
+                padding: 6px;
+            }}
+            /* 上段 3列 (2/6 × 3) */
+            .summary-card.top-row {{
+                grid-column: span 2;
+            }}
+            /* 下段 2列 (3/6 × 2) */
+            .summary-card.bottom-row {{
+                grid-column: span 3;
+            }}
             .summary-card .val {{ font-size: 0.95rem; }}
         }}
     </style>
@@ -458,31 +475,36 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
-        // サマリー描画関数
+        // サマリー描画関数（指定された2行の並び順に対応）
         function renderSummary(containerId, summary) {{
             const el = document.getElementById(containerId);
             el.innerHTML = `
-                <div class="summary-card">
+                <!-- 上段 1: 総発電量 -->
+                <div class="summary-card top-row">
                     <div class="label">総発電量</div>
-                    <div class="val" style="color: #2ecc71;">${{summary.gen.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                    <div class="val" style="color: #2ecc71;">${{summary.gen.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                 </div>
-                <div class="summary-card">
-                    <div class="label">総消費量</div>
-                    <div class="val" style="color: #e67e22;">${{summary.cons.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
-                </div>
-                <div class="summary-card">
-                    <div class="label">買電量 (概算電気代)</div>
-                    <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
+                <!-- 上段 2: 総買電量 -->
+                <div class="summary-card top-row">
+                    <div class="label">総買電量</div>
+                    <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val">¥${{summary.buy_cost.toLocaleString()}}</div>
                 </div>
-                <div class="summary-card">
-                    <div class="label">売電量 (売電収入)</div>
-                    <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.75rem;">kWh</span></div>
-                    <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
-                </div>
-                <div class="summary-card">
+                <!-- 上段 3: 電力自給率 -->
+                <div class="summary-card top-row">
                     <div class="label">電力自給率</div>
                     <div class="val" style="color: #3498db;">${{summary.self_ratio}}%</div>
+                </div>
+                <!-- 下段 1: 総消費量 -->
+                <div class="summary-card bottom-row">
+                    <div class="label">総消費量</div>
+                    <div class="val" style="color: #e67e22;">${{summary.cons.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
+                </div>
+                <!-- 下段 2: 総売電量 -->
+                <div class="summary-card bottom-row">
+                    <div class="label">総売電量</div>
+                    <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
+                    <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
                 </div>
             `;
         }}
@@ -653,4 +675,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("料金計算と概算サマリーテーブルを追加した index.html を生成しました！")
+print("スマホ表示時に上段3列・下段2列に配置するよう調整した index.html を生成しました！")
