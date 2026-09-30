@@ -538,6 +538,69 @@ html_content = f"""<!DOCTYPE html>
             }}, {{ displayModeBar: false }});
 
             const traces = [
+                {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
+                {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
+                {{ x: data.time, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
+                {{ x: data.time, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
+                {{ x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
+                {{ x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
+                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }},
+                {{ 
+                    x: data.time, 
+                    y: data.elevation, 
+                    name: '受光強度', 
+                    type: 'scatter', 
+                    mode: 'lines', 
+                    yaxis: 'y2', 
+                    line: {{ color: colors.elevation, width: 2, dash: 'dot' }},
+                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
+                }}
+            ];
+
+            const layout = {{
+                title: selectedDate + ' (30分粒度)',
+                margin: {{ t: 40, r: 10, l: 10, b: 80 }},
+                height: 460,
+                showlegend: false,
+                dragmode: false,
+                xaxis: {{ title: '時刻', tickangle: -45, nticks: 24, fixedrange: true }},
+                yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
+                yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
+                barmode: 'relative',
+                autosize: true
+            }};
+
+            Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
+        }}
+
+        // 月次グラフ描画
+        function updateMonthlyChart() {{
+            const selectedMonth = monthSelect.value;
+            const data = rawMonthlyData[selectedMonth];
+            if (!data) return;
+
+            renderSummary('monthlySummary', data.summary);
+
+            const minWidth = Math.max(900, data.datetime.length * 5.625);
+            document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
+
+            const yRange = getPowerRangeMonthly(data);
+
+            Plotly.newPlot('monthlyYLeft', [], {{
+                margin: {{ t: 40, r: 0, l: 45, b: 90 }},
+                height: 460,
+                yaxis: {{ title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            Plotly.newPlot('monthlyYRight', [], {{
+                margin: {{ t: 40, r: 45, l: 0, b: 90 }},
+                height: 460,
+                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                xaxis: {{ visible: false, fixedrange: true }}
+            }}, {{ displayModeBar: false }});
+
+            const traces = [
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
                 {{ x: data.datetime, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
