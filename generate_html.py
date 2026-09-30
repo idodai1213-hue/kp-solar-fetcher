@@ -240,10 +240,10 @@ html_content = f"""<!DOCTYPE html>
             background-color: #fff;
         }}
 
-        /* サマリーテーブル用スタイル (PC: 横5列) */
+        /* サマリーテーブル用スタイル (3列×2行の非対称レイアウト) */
         .summary-grid {{
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 8px;
             margin-bottom: 15px;
             padding: 10px;
@@ -260,7 +260,15 @@ html_content = f"""<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             justify-content: center;
+            align-items: center;
         }}
+        /* 右側の電力自給率を上下2行分結合 */
+        .summary-card.span-2row {{
+            grid-row: span 2;
+            background: #f0fdf4; /* ほのかに強調する背景色 */
+            border: 1px solid #bbf7d0;
+        }}
+        
         .summary-card .label {{
             font-size: 0.75rem;
             color: #64748b;
@@ -272,6 +280,9 @@ html_content = f"""<!DOCTYPE html>
             font-size: 1.05rem;
             font-weight: bold;
             color: #1e293b;
+        }}
+        .summary-card.span-2row .val {{
+            font-size: 1.35rem; /* 自給率数値を強調 */
         }}
         .summary-card .sub-val {{
             font-size: 0.75rem;
@@ -340,26 +351,13 @@ html_content = f"""<!DOCTYPE html>
             display: block;
         }}
 
-        /* スマホ用レイアウト (上段3つ / 下段2つ) */
         @media (max-width: 600px) {{
             body {{ padding: 5px; }}
             .card {{ padding: 10px 4px; }}
             .yaxis-fixed-left, .yaxis-fixed-right {{ width: 48px; }}
-            
-            .summary-grid {{
-                grid-template-columns: repeat(6, 1fr);
-                gap: 6px;
-                padding: 6px;
-            }}
-            /* 上段 3列 (2/6 × 3) */
-            .summary-card.top-row {{
-                grid-column: span 2;
-            }}
-            /* 下段 2列 (3/6 × 2) */
-            .summary-card.bottom-row {{
-                grid-column: span 3;
-            }}
+            .summary-grid {{ gap: 6px; padding: 6px; }}
             .summary-card .val {{ font-size: 0.95rem; }}
+            .summary-card.span-2row .val {{ font-size: 1.2rem; }}
         }}
     </style>
 </head>
@@ -475,33 +473,33 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
-        // サマリー描画関数（指定された2行の並び順に対応）
+        // サマリー描画関数（ご指定の結合配置）
         function renderSummary(containerId, summary) {{
             const el = document.getElementById(containerId);
             el.innerHTML = `
-                <!-- 上段 1: 総発電量 -->
-                <div class="summary-card top-row">
+                <!-- 1行目1列: 総発電量 -->
+                <div class="summary-card">
                     <div class="label">総発電量</div>
                     <div class="val" style="color: #2ecc71;">${{summary.gen.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                 </div>
-                <!-- 上段 2: 総買電量 -->
-                <div class="summary-card top-row">
+                <!-- 1行目2列: 総買電量 -->
+                <div class="summary-card">
                     <div class="label">総買電量</div>
                     <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val">¥${{summary.buy_cost.toLocaleString()}}</div>
                 </div>
-                <!-- 上段 3: 電力自給率 -->
-                <div class="summary-card top-row">
+                <!-- 1~2行目3列(結合): 電力自給率 -->
+                <div class="summary-card span-2row">
                     <div class="label">電力自給率</div>
-                    <div class="val" style="color: #3498db;">${{summary.self_ratio}}%</div>
+                    <div class="val" style="color: #27ae60;">${{summary.self_ratio}}%</div>
                 </div>
-                <!-- 下段 1: 総消費量 -->
-                <div class="summary-card bottom-row">
+                <!-- 2行目1列: 総消費量 -->
+                <div class="summary-card">
                     <div class="label">総消費量</div>
                     <div class="val" style="color: #e67e22;">${{summary.cons.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                 </div>
-                <!-- 下段 2: 総売電量 -->
-                <div class="summary-card bottom-row">
+                <!-- 2行目2列: 総売電量 -->
+                <div class="summary-card">
                     <div class="label">総売電量</div>
                     <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
@@ -675,4 +673,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("スマホ表示時に上段3列・下段2列に配置するよう調整した index.html を生成しました！")
+print("ご指定の結合レイアウトに対応した index.html を生成しました！")
