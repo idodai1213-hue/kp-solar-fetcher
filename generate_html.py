@@ -107,6 +107,8 @@ for date_str in dates:
     cons_sum = sub_df['消費電力量[kWh]'].sum()
     
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
+    buy_cost = buy_sum * BUY_PRICE_PER_KWH
+    sell_income = sell_sum * SELL_PRICE_PER_KWH
     
     daily_data[date_str] = {
         'time': sub_df['時刻_str'].tolist(),
@@ -123,9 +125,11 @@ for date_str in dates:
             'buy': round(buy_sum, 2),
             'sell': round(sell_sum, 2),
             'cons': round(cons_sum, 2),
+            'net_power': round(sell_sum - buy_sum, 2), # 電力収支[kWh]
             'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
-            'buy_cost': round(buy_sum * BUY_PRICE_PER_KWH),
-            'sell_income': round(sell_sum * SELL_PRICE_PER_KWH)
+            'buy_cost': round(buy_cost),
+            'sell_income': round(sell_income),
+            'net_cost': round(sell_income - buy_cost) # 金額収支[円]
         }
     }
 
@@ -141,6 +145,8 @@ for month_str in months:
     cons_sum = sub_df['消費電力量[kWh]'].sum()
     
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
+    buy_cost = buy_sum * BUY_PRICE_PER_KWH
+    sell_income = sell_sum * SELL_PRICE_PER_KWH
     
     monthly_data[month_str] = {
         'datetime': sub_df['日時_str'].tolist(),
@@ -157,9 +163,11 @@ for month_str in months:
             'buy': round(buy_sum, 1),
             'sell': round(sell_sum, 1),
             'cons': round(cons_sum, 1),
+            'net_power': round(sell_sum - buy_sum, 1),
             'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
-            'buy_cost': round(buy_sum * BUY_PRICE_PER_KWH),
-            'sell_income': round(sell_sum * SELL_PRICE_PER_KWH)
+            'buy_cost': round(buy_cost),
+            'sell_income': round(sell_income),
+            'net_cost': round(sell_income - buy_cost)
         }
     }
 
@@ -240,7 +248,7 @@ html_content = f"""<!DOCTYPE html>
             background-color: #fff;
         }}
 
-        /* サマリーテーブル用スタイル (3列×2行の非対称レイアウト) */
+        /* サマリーテーブル用スタイル (3列×2行レイアウト) */
         .summary-grid {{
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -262,12 +270,6 @@ html_content = f"""<!DOCTYPE html>
             justify-content: center;
             align-items: center;
         }}
-        /* 右側の電力自給率を上下2行分結合 */
-        .summary-card.span-2row {{
-            grid-row: span 2;
-            background: #f0fdf4; /* ほのかに強調する背景色 */
-            border: 1px solid #bbf7d0;
-        }}
         
         .summary-card .label {{
             font-size: 0.75rem;
@@ -281,17 +283,12 @@ html_content = f"""<!DOCTYPE html>
             font-weight: bold;
             color: #1e293b;
         }}
-        .summary-card.span-2row .val {{
-            font-size: 1.35rem; /* 自給率数値を強調 */
-        }}
         .summary-card .sub-val {{
             font-size: 0.75rem;
-            color: #e74c3c;
             font-weight: bold;
         }}
-        .summary-card .sub-val.income {{
-            color: #2ecc71;
-        }}
+        .summary-card .sub-val.cost {{ color: #e74c3c; }}
+        .summary-card .sub-val.income {{ color: #2ecc71; }}
 
         .custom-legend {{
             display: flex;
@@ -356,8 +353,7 @@ html_content = f"""<!DOCTYPE html>
             .card {{ padding: 10px 4px; }}
             .yaxis-fixed-left, .yaxis-fixed-right {{ width: 48px; }}
             .summary-grid {{ gap: 6px; padding: 6px; }}
-            .summary-card .val {{ font-size: 0.95rem; }}
-            .summary-card.span-2row .val {{ font-size: 1.2rem; }}
+            .summary-card .val {{ font-size: 0.92rem; }}
         }}
     </style>
 </head>
@@ -473,9 +469,15 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
-        // サマリー描画関数（ご指定の結合配置）
+        // サマリー描画関数（指定された3×2配置）
         function renderSummary(containerId, summary) {{
             const el = document.getElementById(containerId);
+            
+            // 収支のプラス・マイナスの表記調整
+            const netPowerSign = summary.net_power > 0 ? '+' : '';
+            const netCostSign = summary.net_cost > 0 ? '+' : '';
+            const netCostClass = summary.net_cost >= 0 ? 'income' : 'cost';
+
             el.innerHTML = `
                 <!-- 1行目1列: 総発電量 -->
                 <div class="summary-card">
@@ -486,10 +488,10 @@ html_content = f"""<!DOCTYPE html>
                 <div class="summary-card">
                     <div class="label">総買電量</div>
                     <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
-                    <div class="sub-val">¥${{summary.buy_cost.toLocaleString()}}</div>
+                    <div class="sub-val cost">¥${{summary.buy_cost.toLocaleString()}}</div>
                 </div>
-                <!-- 1~2行目3列(結合): 電力自給率 -->
-                <div class="summary-card span-2row">
+                <!-- 1行目3列: 電力自給率 -->
+                <div class="summary-card">
                     <div class="label">電力自給率</div>
                     <div class="val" style="color: #27ae60;">${{summary.self_ratio}}%</div>
                 </div>
@@ -503,6 +505,12 @@ html_content = f"""<!DOCTYPE html>
                     <div class="label">総売電量</div>
                     <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
+                </div>
+                <!-- 2行目3列: 電力収支 -->
+                <div class="summary-card">
+                    <div class="label">電力収支 (売-買)</div>
+                    <div class="val" style="color: #2c3e50;">${{netPowerSign}}${{summary.net_power.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
+                    <div class="sub-val ${{netCostClass}}">${{netCostSign}}¥${{summary.net_cost.toLocaleString()}}</div>
                 </div>
             `;
         }}
@@ -673,4 +681,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("ご指定の結合レイアウトに対応した index.html を生成しました！")
+print("電力収支（売電-買電）を追加し、3×2配置を反映した index.html を生成しました！")
