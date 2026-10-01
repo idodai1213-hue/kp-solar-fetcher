@@ -4,16 +4,64 @@ import os
 import math
 
 # ---------------------------------------------------------
-# 定数・単価設定 (必要に応じて変更してください)
+# 単価・基本料金設定 (中部電力 eライフプラン)
 # ---------------------------------------------------------
-BUY_PRICE_PER_KWH = 31.0  # 買電単価 [円/kWh]
-SELL_PRICE_PER_KWH = 16.0 # 売電単価 [円/kWh]
+BASIC_CHARGE_PER_MONTH = 2551.40  # 基本料金 [円/月]
+SELL_PRICE_PER_KWH = 16.0         # 売電単価 [円/kWh]
 
-LATITUDE = 35.333   # 多治見市の緯度 (北緯)
-LONGITUDE = 137.033 # 多治見市の経度 (東経)
+# eライフプラン 買電単価 [円/kWh]
+PRICE_DAYTIME = 32.19     # デイタイム
+PRICE_HOMETIME = 24.13    # @ホームタイム
+PRICE_NIGHTTIME = 14.24   # ナイトタイム
+
+LATITUDE = 35.333   # 多治見市の緯度
+LONGITUDE = 137.033 # 多治見市の経度
 
 PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
-PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピークに補正)
+PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピーク)
+
+# ---------------------------------------------------------
+# eライフプラン 時間帯＆買電単価判定関数
+# ---------------------------------------------------------
+def get_e_life_price(dt):
+    # 日本の固定祝日（簡易判定用：必要に応じて追加可能）
+    # 1/1, 1/2, 1/3, 2/11, 2/23, 4/29, 5/3, 5/4, 5/5, 8/11, 11/3, 11/23, 12/23, 12/29~31
+    month = dt.month
+    day = dt.day
+    weekday = dt.weekday() # 0:月, 1:火, ... 5:土, 6:日
+    
+    is_weekend_or_holiday = False
+    
+    # 土日判定
+    if weekday in [5, 6]:
+        is_weekend_or_holiday = True
+    # 年末年始判定 (1/1~1/3, 12/29~12/31)
+    elif (month == 1 and day <= 3) or (month == 12 and day >= 29):
+        is_weekend_or_holiday = True
+    # 固定祝日等の代表例 (ハッピーマンデー等は曜日等で概算可能ですが一般的な祝日チェック)
+    elif (month, day) in [
+        (1, 1), (1, 12), (2, 11), (2, 23), (3, 20), (3, 21), 
+        (4, 29), (5, 3), (5, 4), (5, 5), (7, 20), (8, 11), 
+        (9, 15), (9, 22), (9, 23), (10, 13), (11, 3), (11, 23)
+    ]:
+        is_weekend_or_holiday = True
+
+    hour = dt.hour
+
+    # ナイトタイム: 毎日 23:00 〜 8:00
+    if hour >= 23 or hour < 8:
+        return PRICE_NIGHTTIME
+    
+    # 休日・祝日の 8:00 〜 23:00 はすべて @ホームタイム
+    if is_weekend_or_holiday:
+        return PRICE_HOMETIME
+    
+    # 平日の 8:00 〜 23:00 の内訳
+    if 10 <= hour < 17:
+        return PRICE_DAYTIME    # デイタイム (10:00 〜 17:00)
+    else:
+        return PRICE_HOMETIME   # @ホームタイム (8:00〜10:00, 17:00〜23:00)
+
 
 # ---------------------------------------------------------
 # 太陽位置およびパネル受光強度計算関数
@@ -27,7 +75,7 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     b = math.radians((360 / 365.0) * (day_of_year - 81))
     eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
     
-    lstm = 135.0  # 日本標準時 (JST)
+    lstm = 135.0  # JST
     time_offset = 4.0 * (lon - lstm) + eot
     time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
     solar_time_hours = time_hours + time_offset / 60.0
@@ -40,14 +88,13 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
                      math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
     sin_elevation = max(-1.0, min(1.0, sin_elevation))
-    elevation_rad = math.asin(sin_elevation)
-    elevation_deg = math.degrees(elevation_rad)
+    elevation_deg = math.degrees(math.asin(sin_elevation))
     
     if elevation_deg <= 0:
         raw_score = 0.0
     else:
         cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
-                       math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(elevation_rad)
+                       math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(math.radians(elevation_deg))
         cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
         
         azimuth_rad = math.acos(cos_azimuth)
@@ -57,8 +104,8 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
         tilt_rad = math.radians(tilt)
         panel_azimuth_rad = math.radians(panel_azimuth)
         
-        cos_incidence = (math.sin(elevation_rad) * math.cos(tilt_rad) + 
-                         math.cos(elevation_rad) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
+        cos_incidence = (math.sin(math.radians(elevation_deg)) * math.cos(tilt_rad) + 
+                         math.cos(math.radians(elevation_deg)) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
                          
         if cos_incidence < 0:
             cos_incidence = 0.0
@@ -89,13 +136,17 @@ df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
-# パネル受光強度 (補正済み) の計算
+# 30分ごとの買電単価を計算
+df['買電単価'] = df['日時'].apply(get_e_life_price)
+df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
+
+# パネル受光強度の計算
 df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
 
-# 2. JSONデータの作成および料金・電力量サマリー計算
+# 2. JSONデータの作成
 
-# (A) 日次データ
+# (A) 日次データ (日次には基本料金は含めず、従量料金のみで純計算)
 dates = sorted(list(df['日付'].unique()), reverse=True)
 daily_data = {}
 for date_str in dates:
@@ -107,7 +158,7 @@ for date_str in dates:
     cons_sum = sub_df['消費電力量[kWh]'].sum()
     
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
-    buy_cost = buy_sum * BUY_PRICE_PER_KWH
+    buy_cost = sub_df['買電コスト'].sum()
     sell_income = sell_sum * SELL_PRICE_PER_KWH
     
     daily_data[date_str] = {
@@ -125,15 +176,16 @@ for date_str in dates:
             'buy': round(buy_sum, 2),
             'sell': round(sell_sum, 2),
             'cons': round(cons_sum, 2),
-            'net_power': round(sell_sum - buy_sum, 2), # 電力収支[kWh]
+            'net_power': round(sell_sum - buy_sum, 2),
             'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
             'buy_cost': round(buy_cost),
             'sell_income': round(sell_income),
-            'net_cost': round(sell_income - buy_cost) # 金額収支[円]
+            'net_cost': round(sell_income - buy_cost),
+            'is_monthly': False
         }
     }
 
-# (B) 月次データ
+# (B) 月次データ (月次買電コストに基本料金 2,551.40 円を組み込み)
 months = sorted(list(df['年月'].unique()), reverse=True)
 monthly_data = {}
 for month_str in months:
@@ -145,7 +197,8 @@ for month_str in months:
     cons_sum = sub_df['消費電力量[kWh]'].sum()
     
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
-    buy_cost = buy_sum * BUY_PRICE_PER_KWH
+    buy_cost_usage = sub_df['買電コスト'].sum()
+    total_buy_cost = buy_cost_usage + BASIC_CHARGE_PER_MONTH  # 従量料金 + 基本料金
     sell_income = sell_sum * SELL_PRICE_PER_KWH
     
     monthly_data[month_str] = {
@@ -165,9 +218,11 @@ for month_str in months:
             'cons': round(cons_sum, 1),
             'net_power': round(sell_sum - buy_sum, 1),
             'self_ratio': round(max(0, min(100, self_sufficiency)), 1),
-            'buy_cost': round(buy_cost),
+            'buy_cost': round(total_buy_cost),
+            'basic_charge': round(BASIC_CHARGE_PER_MONTH, 2),
             'sell_income': round(sell_income),
-            'net_cost': round(sell_income - buy_cost)
+            'net_cost': round(sell_income - total_buy_cost),
+            'is_monthly': True
         }
     }
 
@@ -248,7 +303,6 @@ html_content = f"""<!DOCTYPE html>
             background-color: #fff;
         }}
 
-        /* サマリーテーブル用スタイル (3列×2行レイアウト) */
         .summary-grid {{
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -284,11 +338,16 @@ html_content = f"""<!DOCTYPE html>
             color: #1e293b;
         }}
         .summary-card .sub-val {{
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             font-weight: bold;
         }}
         .summary-card .sub-val.cost {{ color: #e74c3c; }}
         .summary-card .sub-val.income {{ color: #2ecc71; }}
+        .summary-card .note {{
+            font-size: 0.65rem;
+            color: #94a3b8;
+            margin-top: 1px;
+        }}
 
         .custom-legend {{
             display: flex;
@@ -352,8 +411,8 @@ html_content = f"""<!DOCTYPE html>
             body {{ padding: 5px; }}
             .card {{ padding: 10px 4px; }}
             .yaxis-fixed-left, .yaxis-fixed-right {{ width: 48px; }}
-            .summary-grid {{ gap: 6px; padding: 6px; }}
-            .summary-card .val {{ font-size: 0.92rem; }}
+            .summary-grid {{ gap: 5px; padding: 5px; }}
+            .summary-card .val {{ font-size: 0.90rem; }}
         }}
     </style>
 </head>
@@ -385,7 +444,6 @@ html_content = f"""<!DOCTYPE html>
                     <select id="dateSelect" onchange="updateDailyChart()"></select>
                 </div>
                 
-                <!-- 日次サマリーテーブル -->
                 <div class="summary-grid" id="dailySummary"></div>
 
                 <div class="chart-layout-wrapper">
@@ -404,7 +462,6 @@ html_content = f"""<!DOCTYPE html>
                     <select id="monthSelect" onchange="updateMonthlyChart()"></select>
                 </div>
 
-                <!-- 月次サマリーテーブル -->
                 <div class="summary-grid" id="monthlySummary"></div>
 
                 <div class="chart-layout-wrapper">
@@ -469,48 +526,45 @@ html_content = f"""<!DOCTYPE html>
             }}
         }}
 
-        // サマリー描画関数（指定された3×2配置）
         function renderSummary(containerId, summary) {{
             const el = document.getElementById(containerId);
             
-            // 収支のプラス・マイナスの表記調整
             const netPowerSign = summary.net_power > 0 ? '+' : '';
             const netCostSign = summary.net_cost > 0 ? '+' : '';
             const netCostClass = summary.net_cost >= 0 ? 'income' : 'cost';
 
+            const buyNote = summary.is_monthly ? `<div class="note">(基本料 ¥${{summary.basic_charge.toLocaleString()}}込)</div>` : `<div class="note">(eライフ従量計算)</div>`;
+            const netNote = summary.is_monthly ? `<div class="note">(基本料考慮後)</div>` : ``;
+
             el.innerHTML = `
-                <!-- 1行目1列: 総発電量 -->
                 <div class="summary-card">
                     <div class="label">総発電量</div>
                     <div class="val" style="color: #2ecc71;">${{summary.gen.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                 </div>
-                <!-- 1行目2列: 総買電量 -->
                 <div class="summary-card">
                     <div class="label">総買電量</div>
                     <div class="val" style="color: #e74c3c;">${{summary.buy.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val cost">¥${{summary.buy_cost.toLocaleString()}}</div>
+                    ${{buyNote}}
                 </div>
-                <!-- 1行目3列: 電力自給率 -->
                 <div class="summary-card">
                     <div class="label">電力自給率</div>
                     <div class="val" style="color: #27ae60;">${{summary.self_ratio}}%</div>
                 </div>
-                <!-- 2行目1列: 総消費量 -->
                 <div class="summary-card">
                     <div class="label">総消費量</div>
                     <div class="val" style="color: #e67e22;">${{summary.cons.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                 </div>
-                <!-- 2行目2列: 総売電量 -->
                 <div class="summary-card">
                     <div class="label">総売電量</div>
                     <div class="val" style="color: #8e44ad;">${{summary.sell.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val income">¥${{summary.sell_income.toLocaleString()}}</div>
                 </div>
-                <!-- 2行目3列: 電力収支 -->
                 <div class="summary-card">
                     <div class="label">電力収支 (売-買)</div>
                     <div class="val" style="color: #2c3e50;">${{netPowerSign}}${{summary.net_power.toLocaleString()}} <span style="font-size:0.7rem;">kWh</span></div>
                     <div class="sub-val ${{netCostClass}}">${{netCostSign}}¥${{summary.net_cost.toLocaleString()}}</div>
+                    ${{netNote}}
                 </div>
             `;
         }}
@@ -541,7 +595,6 @@ html_content = f"""<!DOCTYPE html>
             return [-limit, limit];
         }}
 
-        // 日次グラフ描画
         function updateDailyChart() {{
             const selectedDate = dateSelect.value;
             const data = rawDailyData[selectedDate];
@@ -601,7 +654,6 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyChartCenter', traces, layout, {{ responsive: true, displayModeBar: false, scrollZoom: false }});
         }}
 
-        // 月次グラフ描画
         function updateMonthlyChart() {{
             const selectedMonth = monthSelect.value;
             const data = rawMonthlyData[selectedMonth];
@@ -681,4 +733,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("電力収支（売電-買電）を追加し、3×2配置を反映した index.html を生成しました！")
+print("eライフプラン単価および月次基本料金(2551.40円)を適用した index.html を作成しました！")
