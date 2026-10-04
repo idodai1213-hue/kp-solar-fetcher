@@ -176,7 +176,7 @@ else:
     df['raw_日照強度'] = 0.0
 
 # ---------------------------------------------------------
-# 2. 受光強度および日照強度の第1軸スケール (0.0 〜 2.5 kWh) 換算
+# 2. 受光強度および日照強度の第1軸スケール (0.0 〜 3.0 kWh) 換算
 # ---------------------------------------------------------
 # 生の受光係数 (0.0 〜 1.0)
 df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
@@ -184,11 +184,11 @@ df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 # 実質日照強度 (0 〜 100%)
 df['実質日照強度_%'] = df['raw_日照強度'] * df['raw_受光係数']
 
-# 第1軸 (0.0 〜 2.5) スケールへの換算
-# 日照強度 (0% = 0.0, 100% = 2.5)
-df['日照強度_軸1'] = (df['実質日照強度_%'] / 100.0) * 2.5
-# 受光強度 (0.0 = 0.0, 1.0 = 2.5)
-df['受光強度_軸1'] = df['raw_受光係数'] * 2.5
+# 第1軸 (0.0 〜 3.0) スケールへの換算
+# 日照強度 (0% = 0.0, 100% = 3.0)
+df['日照強度_軸1'] = (df['実質日照強度_%'] / 100.0) * 3.0
+# 受光強度 (0.0 = 0.0, 1.0 = 3.0)
+df['受光強度_軸1'] = df['raw_受光係数'] * 3.0
 
 # ツールチップ表示用の％値も保持
 df['日照強度_%'] = df['実質日照強度_%'].round(1)
@@ -651,7 +651,7 @@ html_content = f"""<!DOCTYPE html>
                 if (posSum > maxPos) maxPos = posSum;
                 if (negSum > maxNeg) maxNeg = negSum;
             }}
-            let limit = Math.ceil(Math.max(maxPos, maxNeg, 2.5) * 1.05 * 10) / 10;
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 3.0) * 1.05 * 10) / 10;
             return [-limit, limit];
         }}
 
@@ -664,7 +664,7 @@ html_content = f"""<!DOCTYPE html>
                 if (posSum > maxPos) maxPos = posSum;
                 if (negSum > maxNeg) maxNeg = negSum;
             }}
-            let limit = Math.ceil(Math.max(maxPos, maxNeg, 2.5) * 1.05 * 10) / 10;
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 3.0) * 1.05 * 10) / 10;
             return [-limit, limit];
         }}
 
@@ -836,4 +836,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("第1軸(0.0〜2.5kWh)へ換算した index.html を生成しました！")
+print("第1軸(0.0〜3.0kWh)へ換算した index.html を再生成しました！")
