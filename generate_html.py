@@ -7,7 +7,7 @@ import math
 # 単価・基本料金設定 (中部電力 eライフプラン)
 # ---------------------------------------------------------
 BASIC_CHARGE_PER_MONTH = 2551.40  # 基本料金 [円/月]
-SELL_PRICE_PER_KWH = 16.0         # 売電単価 [円/kWh]
+SELL_PRICE_PER_KWH = 16.0          # 売電単価 [円/kWh]
 
 # eライフプラン 買電単価 [円/kWh]
 PRICE_DAYTIME = 32.19     # デイタイム
@@ -24,8 +24,6 @@ PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピーク)
 # eライフプラン 時間帯＆買電単価判定関数
 # ---------------------------------------------------------
 def get_e_life_price(dt):
-    # 日本の固定祝日（簡易判定用：必要に応じて追加可能）
-    # 1/1, 1/2, 1/3, 2/11, 2/23, 4/29, 5/3, 5/4, 5/5, 8/11, 11/3, 11/23, 12/23, 12/29~31
     month = dt.month
     day = dt.day
     weekday = dt.weekday() # 0:月, 1:火, ... 5:土, 6:日
@@ -38,7 +36,7 @@ def get_e_life_price(dt):
     # 年末年始判定 (1/1~1/3, 12/29~12/31)
     elif (month == 1 and day <= 3) or (month == 12 and day >= 29):
         is_weekend_or_holiday = True
-    # 固定祝日等の代表例 (ハッピーマンデー等は曜日等で概算可能ですが一般的な祝日チェック)
+    # 固定祝日等
     elif (month, day) in [
         (1, 1), (1, 12), (2, 11), (2, 23), (3, 20), (3, 21), 
         (4, 29), (5, 3), (5, 4), (5, 5), (7, 20), (8, 11), 
@@ -116,7 +114,7 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     return round(adjusted_score, 2)
 
 
-# 1. CSVファイルの読み込み
+# 1. CSVファイルの読み込み (パワコンデータ)
 csv_path = os.environ.get('CSV_FILENAME', 'パワコン_2026.csv')
 if not os.path.exists(csv_path):
     print(f"Error: {csv_path} が見つかりません。")
@@ -127,16 +125,40 @@ try:
 except:
     df = pd.read_csv(csv_path, encoding='shift_jis')
 
-# 日付と時間の結合
-df['日時'] = df['年月日'] + ' ' + df['時刻']
-df['日時'] = pd.to_datetime(df['日時'])
+df['日時'] = pd.to_datetime(df['年月日'] + ' ' + df['時刻'])
+
+# ---------------------------------------------------------
+# アメダスデータの読み込みと結合
+# ---------------------------------------------------------
+amedas_path = os.environ.get('AMEDAS_FILENAME', 'アメダス_2026.csv')
+if os.path.exists(amedas_path):
+    try:
+        df_amedas = pd.read_csv(amedas_path, encoding='utf-8')
+    except:
+        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis')
+    
+    # 日時カラムの自動判定
+    date_col = next((c for c in df_amedas.columns if '日時' in c or '年月日時' in c or '時間' in c), df_amedas.columns[0])
+    df_amedas['日時'] = pd.to_datetime(df_amedas[date_col])
+    
+    # 日照関連カラムの探索
+    sun_col = next((c for c in df_amedas.columns if '日照' in c), None)
+    if sun_col:
+        df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
+        max_val = df_amedas[sun_col].max()
+        df_amedas['日照強度'] = (df_amedas[sun_col] / max_val * 100.0) if max_val > 0 else 0.0
+        df = pd.merge_asof(df.sort_values('日時'), df_amedas[['日時', '日照強度']].sort_values('日時'), on='日時', direction='nearest')
+    else:
+        df['日照強度'] = 0.0
+else:
+    df['日照強度'] = 0.0
 
 df['日付'] = df['日時'].dt.strftime('%Y-%m-%d')
 df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
 df['年月'] = df['日時'].dt.strftime('%Y-%m')
 df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 
-# 30分ごとの買電単価を計算
+# 30分ごとの買電単価・コスト計算
 df['買電単価'] = df['日時'].apply(get_e_life_price)
 df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
 
@@ -146,7 +168,7 @@ df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
 # 2. JSONデータの作成
 
-# (A) 日次データ (日次には基本料金は含めず、従量料金のみで純計算)
+# (A) 日次データ
 dates = sorted(list(df['日付'].unique()), reverse=True)
 daily_data = {}
 for date_str in dates:
@@ -171,6 +193,7 @@ for date_str in dates:
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
         'elevation': sub_df['仰角'].tolist(),
+        'sunshine': sub_df['日照強度'].round(1).tolist(),
         'summary': {
             'gen': round(gen_sum, 2),
             'buy': round(buy_sum, 2),
@@ -185,7 +208,7 @@ for date_str in dates:
         }
     }
 
-# (B) 月次データ (月次買電コストに基本料金 2,551.40 円を組み込み)
+# (B) 月次データ
 months = sorted(list(df['年月'].unique()), reverse=True)
 monthly_data = {}
 for month_str in months:
@@ -198,7 +221,7 @@ for month_str in months:
     
     self_sufficiency = ((cons_sum - buy_sum) / cons_sum * 100) if cons_sum > 0 else 0
     buy_cost_usage = sub_df['買電コスト'].sum()
-    total_buy_cost = buy_cost_usage + BASIC_CHARGE_PER_MONTH  # 従量料金 + 基本料金
+    total_buy_cost = buy_cost_usage + BASIC_CHARGE_PER_MONTH
     sell_income = sell_sum * SELL_PRICE_PER_KWH
     
     monthly_data[month_str] = {
@@ -211,6 +234,7 @@ for month_str in months:
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
         'elevation': sub_df['仰角'].tolist(),
+        'sunshine': sub_df['日照強度'].round(1).tolist(),
         'summary': {
             'gen': round(gen_sum, 1),
             'buy': round(buy_sum, 1),
@@ -427,6 +451,7 @@ html_content = f"""<!DOCTYPE html>
             </div>
 
             <div class="custom-legend" id="sharedLegend">
+                <div class="legend-item"><div class="legend-color" style="background: rgba(255, 223, 0, 0.6); border: 1px solid #f1c40f;"></div>日照強度 (アメダス)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #2ecc71;"></div>発電(+)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #1e8449;"></div>放電(+)</div>
                 <div class="legend-item"><div class="legend-color" style="background: #e74c3c;"></div>買電(+)</div>
@@ -492,7 +517,9 @@ html_content = f"""<!DOCTYPE html>
             charge: '#3498db',
             sell: '#8e44ad',
             soc: '#2c3e50',
-            elevation: '#f39c12'
+            elevation: '#f39c12',
+            sunshineFill: 'rgba(255, 223, 0, 0.25)',
+            sunshineLine: 'rgba(241, 196, 15, 0.6)'
         }};
 
         const dateSelect = document.getElementById('dateSelect');
@@ -619,6 +646,18 @@ html_content = f"""<!DOCTYPE html>
             }}, {{ displayModeBar: false }});
 
             const traces = [
+                {{
+                    x: data.time,
+                    y: data.sunshine,
+                    name: '日照強度 (サニーイエロー)',
+                    type: 'scatter',
+                    mode: 'lines',
+                    fill: 'tozeroy',
+                    fillcolor: colors.sunshineFill,
+                    line: {{ color: colors.sunshineLine, width: 1 }},
+                    yaxis: 'y2',
+                    hovertemplate: '%{{x}}<br>日照強度: %{{y}}%<extra></extra>'
+                }},
                 {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
                 {{ x: data.time, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
@@ -681,6 +720,18 @@ html_content = f"""<!DOCTYPE html>
             }}, {{ displayModeBar: false }});
 
             const traces = [
+                {{
+                    x: data.datetime,
+                    y: data.sunshine,
+                    name: '日照強度 (サニーイエロー)',
+                    type: 'scatter',
+                    mode: 'lines',
+                    fill: 'tozeroy',
+                    fillcolor: colors.sunshineFill,
+                    line: {{ color: colors.sunshineLine, width: 1 }},
+                    yaxis: 'y2',
+                    hovertemplate: '%{{x}}<br>日照強度: %{{y}}%<extra></extra>'
+                }},
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
                 {{ x: data.datetime, y: data.buy, name: '買電(+)', type: 'bar', marker: {{ color: colors.buy }} }},
@@ -733,4 +784,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("eライフプラン単価および月次基本料金(2551.40円)を適用した index.html を作成しました！")
+print("アメダスデータの日照シェード(サニーイエロー)を適用した index.html を作成しました！")
