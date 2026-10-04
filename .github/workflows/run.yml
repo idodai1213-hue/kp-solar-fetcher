@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium webdriver-manager python-dotenv pandas
+          pip install selenium webdriver-manager python-dotenv pandas requests beautifulsoup4
 
       - name: Install Rclone
         run: |
@@ -58,18 +58,22 @@ jobs:
         run: |
           YEAR=$(date +%Y)
           echo "TARGET_FILE=パワコン_${YEAR}.csv" >> $GITHUB_ENV
-          echo "今年の対象ファイル名: パワコン_${YEAR}.csv"
+          echo "AMEDAS_FILE=アメダス_${YEAR}.csv" >> $GITHUB_ENV
+          echo "今年の対象パワコンファイル名: パワコン_${YEAR}.csv"
+          echo "今年の対象アメダスファイル名: アメダス_${YEAR}.csv"
 
-      - name: Download Master CSV from OneDrive
+      - name: Download Master CSVs from OneDrive
         run: |
           echo "=== 古いローカルCSVの削除 ==="
-          rm -f ./${TARGET_FILE}
+          rm -f ./${TARGET_FILE} ./${AMEDAS_FILE}
           
-          echo "=== OneDriveから ${TARGET_FILE} を強制ダウンロード開始 ==="
+          echo "=== OneDriveから ${TARGET_FILE} および ${AMEDAS_FILE} を強制ダウンロード開始 ==="
           rclone copy "onedrive:ドキュメント/${TARGET_FILE}" ./ -v || true
+          rclone copy "onedrive:ドキュメント/${AMEDAS_FILE}" ./ -v || true
           
           echo "=== ダウンロード後のローカルファイル確認 ==="
-          ls -la ${TARGET_FILE} || echo "※初回の動作またはファイルが存在しません（新規作成されます）"
+          ls -la ${TARGET_FILE} || echo "※パワコンCSVが存在しません（新規作成されます）"
+          ls -la ${AMEDAS_FILE} || echo "※アメダスCSVが存在しません（新規作成されます）"
 
       - name: Run Solar Fetcher & CSV Update
         env:
@@ -78,16 +82,23 @@ jobs:
           CSV_FILENAME: ${{ env.TARGET_FILE }}
         run: python kp_solar_fetcher.py
 
-      - name: Upload updated CSV to OneDrive
+      - name: Run Amedas Fetcher & CSV Update
+        env:
+          AMEDAS_FILENAME: ${{ env.AMEDAS_FILE }}
+        run: python amedas_fetcher.py
+
+      - name: Upload updated CSVs to OneDrive
         run: |
-          echo "=== 更新された ${TARGET_FILE} をOneDriveへアップロード開始 ==="
+          echo "=== 更新された ${TARGET_FILE} および ${AMEDAS_FILE} をOneDriveへアップロード開始 ==="
           rclone copy ./${TARGET_FILE} "onedrive:ドキュメント/" -v
+          rclone copy ./${AMEDAS_FILE} "onedrive:ドキュメント/" -v
 
       # --- ここから Webダッシュボード生成 ＆ デプロイ処理 ---
 
       - name: Generate HTML Dashboard
         env:
           CSV_FILENAME: ${{ env.TARGET_FILE }}
+          AMEDAS_FILENAME: ${{ env.AMEDAS_FILE }}
         run: |
           python generate_html.py
 
