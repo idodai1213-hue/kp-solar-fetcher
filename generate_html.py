@@ -64,7 +64,8 @@ def get_e_life_price(dt):
 # ---------------------------------------------------------
 # 太陽位置およびパネル受光強度計算関数
 # ---------------------------------------------------------
-def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
+def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
+    """パネルへの入射角の余弦 (0.0 〜 1.0) を返す"""
     day_of_year = dt.timetuple().tm_yday
     
     declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
@@ -89,7 +90,7 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     elevation_deg = math.degrees(math.asin(sin_elevation))
     
     if elevation_deg <= 0:
-        raw_score = 0.0
+        return 0.0
     else:
         cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
                        math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(math.radians(elevation_deg))
@@ -105,11 +106,12 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
         cos_incidence = (math.sin(math.radians(elevation_deg)) * math.cos(tilt_rad) + 
                          math.cos(math.radians(elevation_deg)) * math.sin(tilt_rad) * math.cos(azimuth_rad - panel_azimuth_rad))
                          
-        if cos_incidence < 0:
-            cos_incidence = 0.0
-            
-        raw_score = cos_incidence * 100.0
+        return max(0.0, cos_incidence)
 
+def calculate_panel_irradiance_score(dt):
+    """グラフ表示用の受光強度スコア (50.0 〜 100.0)"""
+    cos_inc = get_raw_cos_incidence(dt)
+    raw_score = cos_inc * 100.0
     adjusted_score = 50.0 + (raw_score * 0.5)
     return round(adjusted_score, 2)
 
@@ -128,13 +130,11 @@ except:
 df['日時'] = pd.to_datetime(df['年月日'] + ' ' + df['時刻'])
 
 # ---------------------------------------------------------
-# アメダスデータの読み込みと堅牢な前処理（修正版）
+# アメダスデータの読み込みと前処理
 # ---------------------------------------------------------
 amedas_path = os.environ.get('AMEDAS_FILENAME', 'アメダス_2026.csv')
 if os.path.exists(amedas_path):
     try:
-        # 気象庁CSVのヘッダー（「ダウンロードした時刻」等）を動的にスキップして自動判定
-        # 「年月日」または「日時」が含まれる行をヘッダーとして探す
         header_row = 0
         with open(amedas_path, 'r', encoding='cp932', errors='ignore') as f:
             for idx, line in enumerate(f):
@@ -146,34 +146,33 @@ if os.path.exists(amedas_path):
     except Exception:
         df_amedas = pd.read_csv(amedas_path, encoding='utf-8', skiprows=5)
 
-    # 列名の余白除去
     df_amedas.columns = [str(c).strip() for c in df_amedas.columns]
 
-    # 日時カラム・日照時間カラムの検索
     date_col = next((c for c in df_amedas.columns if '日時' in c or '年月' in c or '時間' in c), df_amedas.columns[0])
     sun_col = next((c for c in df_amedas.columns if '日照' in c), None)
 
     if sun_col:
-        # 日時を datetime 型に変換
         df_amedas['日時'] = pd.to_datetime(df_amedas[date_col], errors='coerce')
         df_amedas = df_amedas.dropna(subset=['日時']).copy()
-
-        # 数値型へ変換
         df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
 
-# --- 1. アメダス日照強度（0〜100%）の算出 ---
+        # 1. アメダス日照強度（0〜100%）の算出
         max_val = df_amedas[sun_col].max()
         scale_base = max_val if max_val > 0 else 1.0
         df_amedas['raw_日照強度'] = (df_amedas[sun_col] / scale_base * 100.0).clip(0, 100)
 
+        # 1時間遅れ補正：アメダスの「10:00」は「9:00〜10:00」の集計値のため1時間前にシフトしてマッピング
+        df_amedas['日時_shifted'] = df_amedas['日時'] - pd.Timedelta(hours=1)
+
         # 30分データへのマッチング
         df = df.sort_values('日時')
-        df_amedas = df_amedas.sort_values('日時')
+        df_amedas = df_amedas.sort_values('日時_shifted')
 
         df = pd.merge_asof(
             df,
-            df_amedas[['日時', 'raw_日照強度']],
-            on='日時',
+            df_amedas[['日時_shifted', 'raw_日照強度']],
+            left_on='日時',
+            right_on='日時_shifted',
             direction='nearest',
             tolerance=pd.Timedelta('1hour')
         )
@@ -184,17 +183,15 @@ else:
     df['raw_日照強度'] = 0.0
 
 # ---------------------------------------------------------
-# 2. 実質日照強度の算出 ＆ グラフ表示用スケーリング（0 -> 50換算）
+# 2. 受光強度との掛け合わせ ＆ グラフ表示用スケーリング（0 -> 50換算）
 # ---------------------------------------------------------
-# ※『受光強度』カラムが 0〜1.0 の場合はそのままで、0〜100(%)の場合は 100 で割って 0〜1 に正規化してください
-if '受光強度' in df.columns:
-    # 受光強度が%表記（0〜100）の場合を考慮して0〜1に変換
-    light_factor = df['受光強度'] / 100.0 if df['受光強度'].max() > 1.0 else df['受光強度']
-    df['実質日照強度'] = df['raw_日照強度'] * light_factor
-else:
-    df['実質日照強度'] = df['raw_日照強度']
+# 生の受光係数 (0.0 〜 1.0) を取得
+df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 
-# 0% のときに 50、100% のときに 100 となるよう換算 (50 + 実質日照強度 * 0.5)
+# アメダスの日照強度(0〜100%) に 生の受光係数(0〜1.0) を掛け合わせて実質日照強度(0〜100%)を算出
+df['実質日照強度'] = df['raw_日照強度'] * df['raw_受光係数']
+
+# グラフ描画用（下限50、上限100）へ変換: (50 + 実質日照強度 * 0.5)
 df['日照強度'] = 50.0 + (df['実質日照強度'] * 0.5)
 
 df['日付'] = df['日時'].dt.strftime('%Y-%m-%d')
@@ -206,7 +203,7 @@ df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 df['買電単価'] = df['日時'].apply(get_e_life_price)
 df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
 
-# パネル受光強度の計算
+# パネル受光強度の計算（グラフ表示用 50〜100%）
 df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
 
@@ -828,4 +825,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("アメダスデータの日照シェード(サニーイエロー)を適用した index.html を作成しました！")
+print("受光強度掛け合わせ補正および1時間シフト処理を適用した index.html を作成しました！")
