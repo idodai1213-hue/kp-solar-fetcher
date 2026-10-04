@@ -161,28 +161,41 @@ if os.path.exists(amedas_path):
         # 数値型へ変換
         df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
 
-        # 日照時間(h)から簡易強度(%)を算出（最大値または1.0hを基準に100%スケール）
+# --- 1. アメダス日照強度（0〜100%）の算出 ---
         max_val = df_amedas[sun_col].max()
         scale_base = max_val if max_val > 0 else 1.0
-        df_amedas['日照強度'] = (df_amedas[sun_col] / scale_base * 100.0).clip(0, 100)
+        df_amedas['raw_日照強度'] = (df_amedas[sun_col] / scale_base * 100.0).clip(0, 100)
 
-        # 30分データへのマッチング（前後の時間差1時間以内をマージ）
+        # 30分データへのマッチング
         df = df.sort_values('日時')
         df_amedas = df_amedas.sort_values('日時')
 
-        # nearestで許容範囲（1時間以内）を指定してマージ
         df = pd.merge_asof(
             df,
-            df_amedas[['日時', '日照強度']],
+            df_amedas[['日時', 'raw_日照強度']],
             on='日時',
             direction='nearest',
             tolerance=pd.Timedelta('1hour')
         )
-        df['日照強度'] = df['日照強度'].fillna(0.0)
+        df['raw_日照強度'] = df['raw_日照強度'].fillna(0.0)
     else:
-        df['日照強度'] = 0.0
+        df['raw_日照強度'] = 0.0
 else:
-    df['日照強度'] = 0.0
+    df['raw_日照強度'] = 0.0
+
+# ---------------------------------------------------------
+# 2. 実質日照強度の算出 ＆ グラフ表示用スケーリング（0 -> 50換算）
+# ---------------------------------------------------------
+# ※『受光強度』カラムが 0〜1.0 の場合はそのままで、0〜100(%)の場合は 100 で割って 0〜1 に正規化してください
+if '受光強度' in df.columns:
+    # 受光強度が%表記（0〜100）の場合を考慮して0〜1に変換
+    light_factor = df['受光強度'] / 100.0 if df['受光強度'].max() > 1.0 else df['受光強度']
+    df['実質日照強度'] = df['raw_日照強度'] * light_factor
+else:
+    df['実質日照強度'] = df['raw_日照強度']
+
+# 0% のときに 50、100% のときに 100 となるよう換算 (50 + 実質日照強度 * 0.5)
+df['日照強度'] = 50.0 + (df['実質日照強度'] * 0.5)
 
 df['日付'] = df['日時'].dt.strftime('%Y-%m-%d')
 df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
