@@ -134,24 +134,22 @@ amedas_path = os.environ.get('AMEDAS_FILENAME', 'アメダス_2026.csv')
 if os.path.exists(amedas_path):
     # エンコーディングの判定と読み込み
     try:
-        df_amedas = pd.read_csv(amedas_path, encoding='utf-8', header=None)
-    except:
-        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis', header=None)
-
-    # 1. 日付文字列が含まれる行（データ本体の開始行）を自動検出
-    header_idx = 0
-    for idx, row in df_amedas.iterrows():
-        row_str = ' '.join(row.astype(str))
-        # 年（202xなど）やスラッシュ・ハイフン区切りの日付パターンを探す
-        if any(char in row_str for char in ['2025', '2026', '/']) and (':' in row_str or '時' in row_str):
-            header_idx = max(0, idx - 1)
-            break
-
-    # ヘッダー位置を指定して再読み込み
-    try:
-        df_amedas = pd.read_csv(amedas_path, encoding='utf-8', skiprows=header_idx)
-    except:
-        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis', skiprows=header_idx)
+        # 気象庁のデータは通常 Shift_JIS (cp932)
+        # 1行目が「ダウンロードした時刻：...」等のメタデータになっているため skiprows 等で適切に読み込みます
+        df_amedas = pd.read_csv(
+            amedas_path,
+            encoding='cp932',
+            skiprows=5,  # データ行の開始位置（またはヘッダーの開始行に合わせて調整）
+            header=None
+        )
+    except Exception as e:
+        # 万が一 UTF-8 で保存されていた場合のフォールバック
+        df_amedas = pd.read_csv(
+            amedas_path,
+            encoding='utf-8',
+            skiprows=5,
+            header=None
+        )
 
     # 列名のクリーニング
     df_amedas.columns = [str(c).strip() for c in df_amedas.columns]
