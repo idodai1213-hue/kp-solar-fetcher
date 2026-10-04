@@ -114,7 +114,7 @@ def calculate_panel_irradiance_score(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL
     return round(adjusted_score, 2)
 
 
-# 1. CSVファイルの読み込み (パワコンデータ)
+# 1. パワコンデータの読み込み
 csv_path = os.environ.get('CSV_FILENAME', 'パワコン_2026.csv')
 if not os.path.exists(csv_path):
     print(f"Error: {csv_path} が見つかりません。")
@@ -128,21 +128,42 @@ except:
 df['日時'] = pd.to_datetime(df['年月日'] + ' ' + df['時刻'])
 
 # ---------------------------------------------------------
-# アメダスデータの読み込みと結合
+# アメダスデータの読み込みと堅牢な前処理
 # ---------------------------------------------------------
 amedas_path = os.environ.get('AMEDAS_FILENAME', 'アメダス_2026.csv')
 if os.path.exists(amedas_path):
+    # エンコーディングの判定と読み込み
     try:
-        df_amedas = pd.read_csv(amedas_path, encoding='utf-8')
+        df_amedas = pd.read_csv(amedas_path, encoding='utf-8', header=None)
     except:
-        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis')
-    
-    # 日時カラムの自動判定
-    date_col = next((c for c in df_amedas.columns if '日時' in c or '年月日時' in c or '時間' in c), df_amedas.columns[0])
-    df_amedas['日時'] = pd.to_datetime(df_amedas[date_col])
-    
-    # 日照関連カラムの探索
+        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis', header=None)
+
+    # 1. 日付文字列が含まれる行（データ本体の開始行）を自動検出
+    header_idx = 0
+    for idx, row in df_amedas.iterrows():
+        row_str = ' '.join(row.astype(str))
+        # 年（202xなど）やスラッシュ・ハイフン区切りの日付パターンを探す
+        if any(char in row_str for char in ['2025', '2026', '/']) and (':' in row_str or '時' in row_str):
+            header_idx = max(0, idx - 1)
+            break
+
+    # ヘッダー位置を指定して再読み込み
+    try:
+        df_amedas = pd.read_csv(amedas_path, encoding='utf-8', skiprows=header_idx)
+    except:
+        df_amedas = pd.read_csv(amedas_path, encoding='shift_jis', skiprows=header_idx)
+
+    # 列名のクリーニング
+    df_amedas.columns = [str(c).strip() for c in df_amedas.columns]
+
+    # 日時カラム・日照カラムの自動探索
+    date_col = next((c for c in df_amedas.columns if '日時' in c or '年月日時' in c or '時間' in c or '年月' in c), df_amedas.columns[0])
     sun_col = next((c for c in df_amedas.columns if '日照' in c), None)
+
+    # 日時変換 (変換不能な文字は NaT にして除外)
+    df_amedas['日時'] = pd.to_datetime(df_amedas[date_col], errors='coerce')
+    df_amedas = df_amedas.dropna(subset=['日時']).copy()
+
     if sun_col:
         df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
         max_val = df_amedas[sun_col].max()
