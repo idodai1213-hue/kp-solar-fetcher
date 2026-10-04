@@ -185,12 +185,9 @@ df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 df['実質日照強度_%'] = df['raw_日照強度'] * df['raw_受光係数']
 
 # 第1軸 (0.0 〜 3.0) スケールへの換算
-# 日照強度 (0% = 0.0, 100% = 3.0)
 df['日照強度_軸1'] = (df['実質日照強度_%'] / 100.0) * 3.0
-# 受光強度 (0.0 = 0.0, 1.0 = 3.0)
 df['受光強度_軸1'] = df['raw_受光係数'] * 3.0
 
-# ツールチップ表示用の％値も保持
 df['日照強度_%'] = df['実質日照強度_%'].round(1)
 df['受光強度_%'] = (df['raw_受光係数'] * 100.0).round(1)
 
@@ -208,11 +205,26 @@ df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
 # JSONデータの作成
 # ---------------------------------------------------------
 
+# 24時間分（00:00 〜 23:30、48コマ）の固定タイムスロット作成
+full_day_time_slots = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+
 # (A) 日次データ
 dates = sorted(list(df['日付'].unique()), reverse=True)
 daily_data = {}
 for date_str in dates:
-    sub_df = df[df['日付'] == date_str]
+    sub_df = df[df['日付'] == date_str].copy()
+    
+    # 24時間固定の全枠にマージする（当日でデータが途中で終わっていても24時間枠を保持）
+    full_day_df = pd.DataFrame({'時刻_str': full_day_time_slots})
+    
+    # 受光強度はデータ有無に関わらず天文学的計算で24時間分求めておく
+    date_dt = pd.to_datetime(date_str)
+    full_day_df['dt'] = full_day_df['時刻_str'].apply(lambda t: pd.to_datetime(f"{date_str} {t}"))
+    full_day_df['calc_受光係数'] = full_day_df['dt'].apply(get_raw_cos_incidence)
+    full_day_df['calc_受光強度_軸1'] = (full_day_df['calc_受光係数'] * 3.0).round(3)
+    full_day_df['calc_受光強度_%'] = (full_day_df['calc_受光係数'] * 100.0).round(1)
+    
+    merged_df = pd.merge(full_day_df, sub_df, on='時刻_str', how='left')
     
     gen_sum = sub_df['発電電力量[kWh]'].sum()
     buy_sum = sub_df['買電電力量[kWh]'].sum()
@@ -223,19 +235,34 @@ for date_str in dates:
     buy_cost = sub_df['買電コスト'].sum()
     sell_income = sell_sum * SELL_PRICE_PER_KWH
     
+    # JSで扱いやすいよう、NaNは None に置換
+    def to_js_list(series):
+        return [None if pd.isna(x) else x for x in series]
+
+    # 受光強度（理論値）はデータ未到達時刻も途切れないように計算値を優先補完
+    elevation_list = []
+    elevation_pct_list = []
+    for idx, row in merged_df.iterrows():
+        if pd.notna(row['受光強度_軸1']):
+            elevation_list.append(row['受光強度_軸1'])
+            elevation_pct_list.append(row['受光強度_%'])
+        else:
+            elevation_list.append(row['calc_受光強度_軸1'])
+            elevation_pct_list.append(row['calc_受光強度_%'])
+
     daily_data[date_str] = {
-        'time': sub_df['時刻_str'].tolist(),
-        'generation': sub_df['発電電力量[kWh]'].tolist(),
-        'buy': sub_df['買電電力量[kWh]'].tolist(),
-        'discharging': sub_df['放電電力量[kWh]'].tolist(),
-        'consumption': (-sub_df['消費電力量[kWh]']).tolist(),
-        'sell': (-sub_df['売電電力量[kWh]']).tolist(),
-        'charging': (-sub_df['充電電力量[kWh]']).tolist(),
-        'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
-        'elevation': sub_df['受光強度_軸1'].round(3).tolist(),
-        'elevation_pct': sub_df['受光強度_%'].tolist(),
-        'sunshine': sub_df['日照強度_軸1'].round(3).tolist(),
-        'sunshine_pct': sub_df['日照強度_%'].tolist(),
+        'time': merged_df['時刻_str'].tolist(),
+        'generation': to_js_list(merged_df['発電電力量[kWh]']),
+        'buy': to_js_list(merged_df['買電電力量[kWh]']),
+        'discharging': to_js_list(merged_df['放電電力量[kWh]']),
+        'consumption': to_js_list(-merged_df['消費電力量[kWh]']),
+        'sell': to_js_list(-merged_df['売電電力量[kWh]']),
+        'charging': to_js_list(-merged_df['充電電力量[kWh]']),
+        'soc': to_js_list(merged_df['蓄電残量(SOC)[%]']),
+        'elevation': elevation_list,
+        'elevation_pct': elevation_pct_list,
+        'sunshine': to_js_list(merged_df['日照強度_軸1'].round(3)),
+        'sunshine_pct': to_js_list(merged_df['日照強度_%']),
         'summary': {
             'gen': round(gen_sum, 2),
             'buy': round(buy_sum, 2),
@@ -568,6 +595,9 @@ html_content = f"""<!DOCTYPE html>
             sunshineLine: 'rgba(241, 196, 15, 0.6)'
         }};
 
+        // 2時間間隔の固定目盛りラベル (00:00, 02:00, 04:00, ... 22:00)
+        const dailyTickVals = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
+
         const dateSelect = document.getElementById('dateSelect');
         dates.forEach(d => {{
             const opt = document.createElement('option');
@@ -691,7 +721,7 @@ html_content = f"""<!DOCTYPE html>
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
 
-            const customSunshineHover = data.time.map((t, idx) => `${{t}}<br>日照強度: ${{data.sunshine_pct[idx]}}%`);
+            const customSunshineHover = data.time.map((t, idx) => data.sunshine_pct[idx] !== null ? `${{t}}<br>日照強度: ${{data.sunshine_pct[idx]}}%` : `${{t}}<br>日照強度: -`);
             const customElevationHover = data.time.map((t, idx) => `${{t}}<br>受光強度: ${{data.elevation_pct[idx]}}%`);
 
             const traces = [
@@ -705,7 +735,8 @@ html_content = f"""<!DOCTYPE html>
                     fillcolor: colors.sunshineFill,
                     line: {{ color: colors.sunshineLine, width: 1 }},
                     hovertext: customSunshineHover,
-                    hoverinfo: 'text'
+                    hoverinfo: 'text',
+                    connectgaps: false
                 }},
                 {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -713,7 +744,7 @@ html_content = f"""<!DOCTYPE html>
                 {{ x: data.time, y: data.consumption, name: '消費(-)', type: 'bar', marker: {{ color: colors.cons }} }},
                 {{ x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: {{ color: colors.charge }} }},
                 {{ x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: {{ color: colors.sell }} }},
-                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }} }},
+                {{ x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: {{ color: colors.soc, width: 2 }}, marker: {{ size: 4 }}, connectgaps: false }},
                 {{ 
                     x: data.time, 
                     y: data.elevation, 
@@ -732,7 +763,14 @@ html_content = f"""<!DOCTYPE html>
                 height: 460,
                 showlegend: false,
                 dragmode: false,
-                xaxis: {{ title: '時刻', tickangle: -45, nticks: 24, fixedrange: true }},
+                xaxis: {{ 
+                    title: '時刻', 
+                    tickangle: -45, 
+                    tickvals: dailyTickVals,
+                    ticktext: dailyTickVals,
+                    range: ['00:00', '23:30'],
+                    fixedrange: true 
+                }},
                 yaxis: {{ range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true }},
                 yaxis2: {{ range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true }},
                 barmode: 'relative',
@@ -836,4 +874,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("第1軸(0.0〜3.0kWh)へ換算した index.html を再生成しました！")
+print("日次グラフの横軸範囲(0:00〜23:30)および目盛り(2時間間隔)を固定した index.html を再生成しました！")
