@@ -108,13 +108,6 @@ def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, 
                          
         return max(0.0, cos_incidence)
 
-def calculate_panel_irradiance_score(dt):
-    """グラフ表示用の受光強度スコア (50.0 〜 100.0)"""
-    cos_inc = get_raw_cos_incidence(dt)
-    raw_score = cos_inc * 100.0
-    adjusted_score = 50.0 + (raw_score * 0.5)
-    return round(adjusted_score, 2)
-
 
 # 1. パワコンデータの読み込み
 csv_path = os.environ.get('CSV_FILENAME', 'パワコン_2026.csv')
@@ -156,12 +149,12 @@ if os.path.exists(amedas_path):
         df_amedas = df_amedas.dropna(subset=['日時']).copy()
         df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
 
-        # 1. アメダス日照強度（0〜100%）の算出
+        # アメダス日照強度（0〜100%）の算出
         max_val = df_amedas[sun_col].max()
         scale_base = max_val if max_val > 0 else 1.0
         df_amedas['raw_日照強度'] = (df_amedas[sun_col] / scale_base * 100.0).clip(0, 100)
 
-        # 1時間遅れ補正：アメダスの「10:00」は「9:00〜10:00」の集計値のため1時間前にシフトしてマッピング
+        # 1時間遅れ補正
         df_amedas['日時_shifted'] = df_amedas['日時'] - pd.Timedelta(hours=1)
 
         # 30分データへのマッチング
@@ -183,16 +176,23 @@ else:
     df['raw_日照強度'] = 0.0
 
 # ---------------------------------------------------------
-# 2. 受光強度との掛け合わせ ＆ グラフ表示用スケーリング（0 -> 50換算）
+# 2. 受光強度および日照強度の第1軸スケール (0.0 〜 2.5 kWh) 換算
 # ---------------------------------------------------------
-# 生の受光係数 (0.0 〜 1.0) を取得
+# 生の受光係数 (0.0 〜 1.0)
 df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 
-# アメダスの日照強度(0〜100%) に 生の受光係数(0〜1.0) を掛け合わせて実質日照強度(0〜100%)を算出
-df['実質日照強度'] = df['raw_日照強度'] * df['raw_受光係数']
+# 実質日照強度 (0 〜 100%)
+df['実質日照強度_%'] = df['raw_日照強度'] * df['raw_受光係数']
 
-# グラフ描画用（下限50、上限100）へ変換: (50 + 実質日照強度 * 0.5)
-df['日照強度'] = 50.0 + (df['実質日照強度'] * 0.5)
+# 第1軸 (0.0 〜 2.5) スケールへの換算
+# 日照強度 (0% = 0.0, 100% = 2.5)
+df['日照強度_軸1'] = (df['実質日照強度_%'] / 100.0) * 2.5
+# 受光強度 (0.0 = 0.0, 1.0 = 2.5)
+df['受光強度_軸1'] = df['raw_受光係数'] * 2.5
+
+# ツールチップ表示用の％値も保持
+df['日照強度_%'] = df['実質日照強度_%'].round(1)
+df['受光強度_%'] = (df['raw_受光係数'] * 100.0).round(1)
 
 df['日付'] = df['日時'].dt.strftime('%Y-%m-%d')
 df['時刻_str'] = df['日時'].dt.strftime('%H:%M')
@@ -203,11 +203,10 @@ df['日時_str'] = df['日時'].dt.strftime('%Y-%m-%d %H:%M')
 df['買電単価'] = df['日時'].apply(get_e_life_price)
 df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
 
-# パネル受光強度の計算（グラフ表示用 50〜100%）
-df['仰角'] = df['日時'].apply(calculate_panel_irradiance_score)
 
-
-# 2. JSONデータの作成
+# ---------------------------------------------------------
+# JSONデータの作成
+# ---------------------------------------------------------
 
 # (A) 日次データ
 dates = sorted(list(df['日付'].unique()), reverse=True)
@@ -233,8 +232,10 @@ for date_str in dates:
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
-        'elevation': sub_df['仰角'].tolist(),
-        'sunshine': sub_df['日照強度'].round(1).tolist(),
+        'elevation': sub_df['受光強度_軸1'].round(3).tolist(),
+        'elevation_pct': sub_df['受光強度_%'].tolist(),
+        'sunshine': sub_df['日照強度_軸1'].round(3).tolist(),
+        'sunshine_pct': sub_df['日照強度_%'].tolist(),
         'summary': {
             'gen': round(gen_sum, 2),
             'buy': round(buy_sum, 2),
@@ -274,8 +275,10 @@ for month_str in months:
         'sell': (-sub_df['売電電力量[kWh]']).tolist(),
         'charging': (-sub_df['充電電力量[kWh]']).tolist(),
         'soc': sub_df['蓄電残量(SOC)[%]'].tolist(),
-        'elevation': sub_df['仰角'].tolist(),
-        'sunshine': sub_df['日照強度'].round(1).tolist(),
+        'elevation': sub_df['受光強度_軸1'].round(3).tolist(),
+        'elevation_pct': sub_df['受光強度_%'].tolist(),
+        'sunshine': sub_df['日照強度_軸1'].round(3).tolist(),
+        'sunshine_pct': sub_df['日照強度_%'].tolist(),
         'summary': {
             'gen': round(gen_sum, 1),
             'buy': round(buy_sum, 1),
@@ -296,7 +299,9 @@ json_dates = json.dumps(dates, ensure_ascii=False)
 json_monthly_data = json.dumps(monthly_data, ensure_ascii=False)
 json_months = json.dumps(months, ensure_ascii=False)
 
+# ---------------------------------------------------------
 # 3. HTMLテンプレートの作成
+# ---------------------------------------------------------
 html_content = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -646,7 +651,7 @@ html_content = f"""<!DOCTYPE html>
                 if (posSum > maxPos) maxPos = posSum;
                 if (negSum > maxNeg) maxNeg = negSum;
             }}
-            let limit = Math.ceil(Math.max(maxPos, maxNeg, 1.5) * 1.1 * 10) / 10;
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 2.5) * 1.05 * 10) / 10;
             return [-limit, limit];
         }}
 
@@ -659,7 +664,7 @@ html_content = f"""<!DOCTYPE html>
                 if (posSum > maxPos) maxPos = posSum;
                 if (negSum > maxNeg) maxNeg = negSum;
             }}
-            let limit = Math.ceil(Math.max(maxPos, maxNeg, 1.5) * 1.1 * 10) / 10;
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 2.5) * 1.05 * 10) / 10;
             return [-limit, limit];
         }}
 
@@ -682,9 +687,12 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('dailyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 80 }},
                 height: 460,
-                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: '蓄電SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
+
+            const customSunshineHover = data.time.map((t, idx) => `${{t}}<br>日照強度: ${{data.sunshine_pct[idx]}}%`);
+            const customElevationHover = data.time.map((t, idx) => `${{t}}<br>受光強度: ${{data.elevation_pct[idx]}}%`);
 
             const traces = [
                 {{
@@ -696,8 +704,8 @@ html_content = f"""<!DOCTYPE html>
                     fill: 'tozeroy',
                     fillcolor: colors.sunshineFill,
                     line: {{ color: colors.sunshineLine, width: 1 }},
-                    yaxis: 'y2',
-                    hovertemplate: '%{{x}}<br>日照強度: %{{y}}%<extra></extra>'
+                    hovertext: customSunshineHover,
+                    hoverinfo: 'text'
                 }},
                 {{ x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -712,9 +720,9 @@ html_content = f"""<!DOCTYPE html>
                     name: '受光強度', 
                     type: 'scatter', 
                     mode: 'lines', 
-                    yaxis: 'y2', 
                     line: {{ color: colors.elevation, width: 2, dash: 'dot' }},
-                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
+                    hovertext: customElevationHover,
+                    hoverinfo: 'text'
                 }}
             ];
 
@@ -756,9 +764,12 @@ html_content = f"""<!DOCTYPE html>
             Plotly.newPlot('monthlyYRight', [], {{
                 margin: {{ t: 40, r: 45, l: 0, b: 90 }},
                 height: 460,
-                yaxis: {{ title: 'SOC / 受光強度 [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
+                yaxis: {{ title: '蓄電SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false }},
                 xaxis: {{ visible: false, fixedrange: true }}
             }}, {{ displayModeBar: false }});
+
+            const customSunshineHover = data.datetime.map((t, idx) => `${{t}}<br>日照強度: ${{data.sunshine_pct[idx]}}%`);
+            const customElevationHover = data.datetime.map((t, idx) => `${{t}}<br>受光強度: ${{data.elevation_pct[idx]}}%`);
 
             const traces = [
                 {{
@@ -770,8 +781,8 @@ html_content = f"""<!DOCTYPE html>
                     fill: 'tozeroy',
                     fillcolor: colors.sunshineFill,
                     line: {{ color: colors.sunshineLine, width: 1 }},
-                    yaxis: 'y2',
-                    hovertemplate: '%{{x}}<br>日照強度: %{{y}}%<extra></extra>'
+                    hovertext: customSunshineHover,
+                    hoverinfo: 'text'
                 }},
                 {{ x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: {{ color: colors.gen }} }},
                 {{ x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: {{ color: colors.discharge }} }},
@@ -786,9 +797,9 @@ html_content = f"""<!DOCTYPE html>
                     name: '受光強度', 
                     type: 'scatter', 
                     mode: 'lines', 
-                    yaxis: 'y2', 
                     line: {{ color: colors.elevation, width: 1.2, dash: 'dot' }},
-                    hovertemplate: '%{{x}}<br>受光強度: %{{y}}%<extra></extra>'
+                    hovertext: customElevationHover,
+                    hoverinfo: 'text'
                 }}
             ];
 
@@ -825,4 +836,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("受光強度掛け合わせ補正および1時間シフト処理を適用した index.html を作成しました！")
+print("第1軸(0.0〜2.5kWh)へ換算した index.html を生成しました！")
