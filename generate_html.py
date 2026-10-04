@@ -128,45 +128,57 @@ except:
 df['日時'] = pd.to_datetime(df['年月日'] + ' ' + df['時刻'])
 
 # ---------------------------------------------------------
-# アメダスデータの読み込みと堅牢な前処理
+# アメダスデータの読み込みと堅牢な前処理（修正版）
 # ---------------------------------------------------------
 amedas_path = os.environ.get('AMEDAS_FILENAME', 'アメダス_2026.csv')
 if os.path.exists(amedas_path):
-    # エンコーディングの判定と読み込み
     try:
-        # 気象庁のデータは通常 Shift_JIS (cp932)
-        # 1行目が「ダウンロードした時刻：...」等のメタデータになっているため skiprows 等で適切に読み込みます
-        df_amedas = pd.read_csv(
-            amedas_path,
-            encoding='cp932',
-            skiprows=5,  # データ行の開始位置（またはヘッダーの開始行に合わせて調整）
-            header=None
-        )
-    except Exception as e:
-        # 万が一 UTF-8 で保存されていた場合のフォールバック
-        df_amedas = pd.read_csv(
-            amedas_path,
-            encoding='utf-8',
-            skiprows=5,
-            header=None
-        )
+        # 気象庁CSVのヘッダー（「ダウンロードした時刻」等）を動的にスキップして自動判定
+        # 「年月日」または「日時」が含まれる行をヘッダーとして探す
+        header_row = 0
+        with open(amedas_path, 'r', encoding='cp932', errors='ignore') as f:
+            for idx, line in enumerate(f):
+                if '年月日時' in line or '日時' in line or '年月日' in line:
+                    header_row = idx
+                    break
+        
+        df_amedas = pd.read_csv(amedas_path, encoding='cp932', skiprows=header_row)
+    except Exception:
+        df_amedas = pd.read_csv(amedas_path, encoding='utf-8', skiprows=5)
 
-    # 列名のクリーニング
+    # 列名の余白除去
     df_amedas.columns = [str(c).strip() for c in df_amedas.columns]
 
-    # 日時カラム・日照カラムの自動探索
-    date_col = next((c for c in df_amedas.columns if '日時' in c or '年月日時' in c or '時間' in c or '年月' in c), df_amedas.columns[0])
+    # 日時カラム・日照時間カラムの検索
+    date_col = next((c for c in df_amedas.columns if '日時' in c or '年月' in c or '時間' in c), df_amedas.columns[0])
     sun_col = next((c for c in df_amedas.columns if '日照' in c), None)
 
-    # 日時変換 (変換不能な文字は NaT にして除外)
-    df_amedas['日時'] = pd.to_datetime(df_amedas[date_col], errors='coerce')
-    df_amedas = df_amedas.dropna(subset=['日時']).copy()
-
     if sun_col:
+        # 日時を datetime 型に変換
+        df_amedas['日時'] = pd.to_datetime(df_amedas[date_col], errors='coerce')
+        df_amedas = df_amedas.dropna(subset=['日時']).copy()
+
+        # 数値型へ変換
         df_amedas[sun_col] = pd.to_numeric(df_amedas[sun_col], errors='coerce').fillna(0)
+
+        # 日照時間(h)から簡易強度(%)を算出（最大値または1.0hを基準に100%スケール）
         max_val = df_amedas[sun_col].max()
-        df_amedas['日照強度'] = (df_amedas[sun_col] / max_val * 100.0) if max_val > 0 else 0.0
-        df = pd.merge_asof(df.sort_values('日時'), df_amedas[['日時', '日照強度']].sort_values('日時'), on='日時', direction='nearest')
+        scale_base = max_val if max_val > 0 else 1.0
+        df_amedas['日照強度'] = (df_amedas[sun_col] / scale_base * 100.0).clip(0, 100)
+
+        # 30分データへのマッチング（前後の時間差1時間以内をマージ）
+        df = df.sort_values('日時')
+        df_amedas = df_amedas.sort_values('日時')
+
+        # nearestで許容範囲（1時間以内）を指定してマージ
+        df = pd.merge_asof(
+            df,
+            df_amedas[['日時', '日照強度']],
+            on='日時',
+            direction='nearest',
+            tolerance=pd.Timedelta('1hour')
+        )
+        df['日照強度'] = df['日照強度'].fillna(0.0)
     else:
         df['日照強度'] = 0.0
 else:
