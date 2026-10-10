@@ -21,6 +21,12 @@ PANEL_TILT_DEG = 25.0       # 屋根の傾斜角 [度]
 PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピーク)
 
 # ---------------------------------------------------------
+# 地形（山影）考慮パラメータ (案1: 太陽高度しきい値)
+# ---------------------------------------------------------
+# 太陽高度がこの角度以下の時間帯は、周囲の山影によって日射が遮られているとみなす
+MOUNTAIN_ELEVATION_THRESHOLD_DEG = 5.0
+
+# ---------------------------------------------------------
 # eライフプラン 時間帯＆買電単価判定関数
 # ---------------------------------------------------------
 def get_e_life_price(dt):
@@ -64,8 +70,8 @@ def get_e_life_price(dt):
 # ---------------------------------------------------------
 # 太陽位置およびパネル受光強度計算関数
 # ---------------------------------------------------------
-def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
-    """パネルへの入射角の余弦 (0.0 〜 1.0) を返す"""
+def get_solar_elevation(dt, lat=LATITUDE, lon=LONGITUDE):
+    """指定日時の太陽高度（度）を返す"""
     day_of_year = dt.timetuple().tm_yday
     
     declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
@@ -87,11 +93,31 @@ def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, 
     sin_elevation = (math.sin(lat_rad) * math.sin(declination_rad) +
                      math.cos(lat_rad) * math.cos(declination_rad) * math.cos(hour_angle_rad))
     sin_elevation = max(-1.0, min(1.0, sin_elevation))
-    elevation_deg = math.degrees(math.asin(sin_elevation))
+    return math.degrees(math.asin(sin_elevation))
+
+
+def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, panel_azimuth=PANEL_AZIMUTH_DEG):
+    """パネルへの入射角の余弦 (0.0 〜 1.0) を返す（地形による山影も考慮）"""
+    elevation_deg = get_solar_elevation(dt, lat, lon)
     
-    if elevation_deg <= 0:
+    # 太陽高度が地平線以下、または多治見の山影しきい値以下の場合は受光なしとみなす
+    if elevation_deg <= MOUNTAIN_ELEVATION_THRESHOLD_DEG:
         return 0.0
     else:
+        day_of_year = dt.timetuple().tm_yday
+        declination_deg = 23.45 * math.sin(math.radians(360 / 365.0 * (284 + day_of_year)))
+        declination_rad = math.radians(declination_deg)
+        
+        b = math.radians((360 / 365.0) * (day_of_year - 81))
+        eot = 9.87 * math.sin(2 * b) - 7.53 * math.cos(b) - 1.5 * math.sin(b)
+        lstm = 135.0
+        time_offset = 4.0 * (lon - lstm) + eot
+        time_hours = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+        solar_time_hours = time_hours + time_offset / 60.0
+        hour_angle_deg = (solar_time_hours - 12.0) * 15.0
+        hour_angle_rad = math.radians(hour_angle_deg)
+        lat_rad = math.radians(lat)
+
         cos_azimuth = (math.sin(declination_rad) * math.cos(lat_rad) - 
                        math.cos(declination_rad) * math.sin(lat_rad) * math.cos(hour_angle_rad)) / math.cos(math.radians(elevation_deg))
         cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
@@ -874,4 +900,4 @@ html_content = f"""<!DOCTYPE html>
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("日次グラフの横軸範囲(0:00〜23:30)および目盛り(2時間間隔)を固定した index.html を再生成しました！")
+print("多治見の山影（太陽高度しきい値）を考慮した受光・日照計算付き index.html を生成しました！")
