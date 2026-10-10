@@ -23,7 +23,6 @@ PANEL_AZIMUTH_DEG = 142.0   # パネルの方位角 [度] (10:30ピーク)
 # ---------------------------------------------------------
 # 地形（山影）考慮パラメータ (日照強度の補正用)
 # ---------------------------------------------------------
-# 太陽高度がこの角度以下の時間帯は、山影による影響（アメダスデータの1時間積算ラグ）を考慮するしきい値
 MOUNTAIN_ELEVATION_THRESHOLD_DEG = 3.0
 
 # ---------------------------------------------------------
@@ -207,18 +206,12 @@ else:
 # 生の受光係数 (0.0 〜 1.0)
 df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 
-# 朝方の山影によるアメダス積算ラグを補正するロジック
-# 太陽高度がしきい値以下（山影内）の時間帯であっても、実際のパネルが受光している場合は
-# アメダス側の過小評価（積算遅れ）を軽減するため、受光係数をベースにした下限フロアまたは補正を適用
 def apply_mountain_sunshine_correction(row):
     raw_sun = row['raw_日照強度']
     dt = row['日時']
     elevation = get_solar_elevation(dt)
     
-    # 朝方かつ太陽高度がしきい値以下（山影考慮帯）のとき、アメダスが0であっても
-    # 受光係数が立ち上がっていれば、山影による時間積算の遅れとみなして補正をかける
     if elevation <= MOUNTAIN_ELEVATION_THRESHOLD_DEG and elevation > 0:
-        # 受光係数の割合に応じて日照強度の下限を持ち上げる（過小評価の緩和）
         effective_sun = max(raw_sun, row['raw_受光係数'] * 100.0 * 0.8)
         return effective_sun
     return raw_sun
@@ -251,8 +244,6 @@ df['買電コスト'] = df['買電電力量[kWh]'] * df['買電単価']
 # ---------------------------------------------------------
 # JSONデータの作成
 # ---------------------------------------------------------
-
-# 24時間分（00:00 〜 23:30、48コマ）の固定タイムスロット作成
 full_day_time_slots = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
 
 # (A) 日次データ
@@ -260,11 +251,8 @@ dates = sorted(list(df['日付'].unique()), reverse=True)
 daily_data = {}
 for date_str in dates:
     sub_df = df[df['日付'] == date_str].copy()
-    
-    # 24時間固定の全枠にマージする（当日でデータが途中で終わっていても24時間枠を保持）
     full_day_df = pd.DataFrame({'時刻_str': full_day_time_slots})
     
-    # 受光強度はデータ有無に関わらず天文学的計算で24時間分求めておく
     date_dt = pd.to_datetime(date_str)
     full_day_df['dt'] = full_day_df['時刻_str'].apply(lambda t: pd.to_datetime(f"{date_str} {t}"))
     full_day_df['calc_受光係数'] = full_day_df['dt'].apply(get_raw_cos_incidence)
@@ -282,11 +270,9 @@ for date_str in dates:
     buy_cost = sub_df['買電コスト'].sum()
     sell_income = sell_sum * SELL_PRICE_PER_KWH
     
-    # JSで扱いやすいよう、NaNは None に置換
     def to_js_list(series):
         return [None if pd.isna(x) else x for x in series]
 
-    # 受光強度（理論値）はデータ未到達時刻も途切れないように計算値を優先補完
     elevation_list = []
     elevation_pct_list = []
     for idx, row in merged_df.iterrows():
@@ -376,7 +362,7 @@ json_months = json.dumps(months, ensure_ascii=False)
 # ---------------------------------------------------------
 # 3. HTMLテンプレートの作成
 # ---------------------------------------------------------
-html_content = f"""<!DOCTYPE html>
+html_template = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -386,37 +372,37 @@ html_content = f"""<!DOCTYPE html>
     <link rel="icon" type="image/png" href="solar_dashboard_icon_light.png">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
-        body {{
+        body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             margin: 0;
             padding: 10px;
             background-color: #f4f7f9;
             color: #333;
-        }}
-        .container {{
+        }
+        .container {
             max-width: 1100px;
             margin: 0 auto;
-        }}
-        .card {{
+        }
+        .card {
             background: #fff;
             padding: 15px 8px;
             border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
             margin-bottom: 20px;
-        }}
-        h1 {{
+        }
+        h1 {
             font-size: 1.4rem;
             margin-top: 0;
             color: #2c3e50;
             text-align: center;
-        }}
-        .tabs {{
+        }
+        .tabs {
             display: flex;
             justify-content: center;
             gap: 10px;
             margin-bottom: 15px;
-        }}
-        .tab-btn {{
+        }
+        .tab-btn {
             padding: 10px 18px;
             font-size: 0.95rem;
             font-weight: bold;
@@ -426,28 +412,28 @@ html_content = f"""<!DOCTYPE html>
             color: #555;
             cursor: pointer;
             transition: all 0.2s;
-        }}
-        .tab-btn.active {{
+        }
+        .tab-btn.active {
             background-color: #3498db;
             color: #fff;
             box-shadow: 0 2px 6px rgba(52, 152, 219, 0.4);
-        }}
-        .controls {{
+        }
+        .controls {
             display: flex;
             justify-content: center;
             align-items: center;
             gap: 10px;
             margin-bottom: 12px;
-        }}
-        select {{
+        }
+        select {
             padding: 8px 16px;
             font-size: 1rem;
             border-radius: 8px;
             border: 1px solid #ccc;
             background-color: #fff;
-        }}
+        }
 
-        .summary-grid {{
+        .summary-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 8px;
@@ -456,8 +442,8 @@ html_content = f"""<!DOCTYPE html>
             background: #f8fafc;
             border-radius: 8px;
             border: 1px solid #e2e8f0;
-        }}
-        .summary-card {{
+        }
+        .summary-card {
             background: #ffffff;
             padding: 8px 6px;
             border-radius: 6px;
@@ -467,33 +453,33 @@ html_content = f"""<!DOCTYPE html>
             flex-direction: column;
             justify-content: center;
             align-items: center;
-        }}
+        }
         
-        .summary-card .label {{
+        .summary-card .label {
             font-size: 0.75rem;
             color: #64748b;
             font-weight: bold;
             margin-bottom: 2px;
             white-space: nowrap;
-        }}
-        .summary-card .val {{
+        }
+        .summary-card .val {
             font-size: 1.05rem;
             font-weight: bold;
             color: #1e293b;
-        }}
-        .summary-card .sub-val {{
+        }
+        .summary-card .sub-val {
             font-size: 0.72rem;
             font-weight: bold;
-        }}
-        .summary-card .sub-val.cost {{ color: #e74c3c; }}
-        .summary-card .sub-val.income {{ color: #2ecc71; }}
-        .summary-card .note {{
+        }
+        .summary-card .sub-val.cost { color: #e74c3c; }
+        .summary-card .sub-val.income { color: #2ecc71; }
+        .summary-card .note {
             font-size: 0.65rem;
             color: #94a3b8;
             margin-top: 1px;
-        }}
+        }
 
-        .custom-legend {{
+        .custom-legend {
             display: flex;
             flex-wrap: wrap;
             justify-content: center;
@@ -504,22 +490,425 @@ html_content = f"""<!DOCTYPE html>
             border-radius: 8px;
             font-size: 0.8rem;
             font-weight: bold;
-        }}
-        .legend-item {{
+        }
+        .legend-item {
             display: flex;
             align-items: center;
             gap: 4px;
-        }}
-        .legend-color {{
+        }
+        .legend-color {
             width: 12px;
             height: 12px;
             border-radius: 3px;
-        }}
+        }
 
-        .chart-layout-wrapper {{
+        .chart-layout-wrapper {
             display: flex;
             width: 100%;
             position: relative;
             background: #fff;
-        }}
-        .yaxis-fixed-
+        }
+        .yaxis-fixed-left {
+            width: 55px;
+            flex-shrink: 0;
+            z-index: 10;
+            background: #fff;
+        }
+        .yaxis-fixed-right {
+            width: 55px;
+            flex-shrink: 0;
+            z-index: 10;
+            background: #fff;
+        }
+        .chart-scroll-center {
+            flex-grow: 1;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
+        }
+        .chart-inner-content {
+            min-width: 100%;
+        }
+
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        @media (max-width: 600px) {
+            body { padding: 5px; }
+            .card { padding: 10px 4px; }
+            .yaxis-fixed-left, .yaxis-fixed-right { width: 48px; }
+            .summary-grid { gap: 5px; padding: 5px; }
+            .summary-card .val { font-size: 0.90rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>☀️ 太陽光発電 収支ダッシュボード</h1>
+            
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('daily')">日次 (24時間)</button>
+                <button class="tab-btn" onclick="switchTab('monthly')">月次 (31日間・30分刻み)</button>
+            </div>
+
+            <div class="custom-legend" id="sharedLegend">
+                <div class="legend-item"><div class="legend-color" style="background: rgba(255, 223, 0, 0.6); border: 1px solid #f1c40f;"></div>日照強度 (アメダス)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #2ecc71;"></div>発電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #1e8449;"></div>放電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #e74c3c;"></div>買電(+)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #e67e22;"></div>消費(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #3498db;"></div>充電(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #8e44ad;"></div>売電(-)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #2c3e50;"></div>蓄電SOC[%]</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f39c12;"></div>受光強度(10:30ピーク/25°)</div>
+            </div>
+
+            <!-- 日次コンテンツ -->
+            <div id="dailyTab" class="tab-content active">
+                <div class="controls">
+                    <label for="dateSelect"><strong>日付選択:</strong></label>
+                    <select id="dateSelect" onchange="updateDailyChart()"></select>
+                </div>
+                
+                <div class="summary-grid" id="dailySummary"></div>
+
+                <div class="chart-layout-wrapper">
+                    <div id="dailyYLeft" class="yaxis-fixed-left"></div>
+                    <div class="chart-scroll-center">
+                        <div id="dailyChartCenter" style="width: 100%; height: 460px;"></div>
+                    </div>
+                    <div id="dailyYRight" class="yaxis-fixed-right"></div>
+                </div>
+            </div>
+
+            <!-- 月次コンテンツ -->
+            <div id="monthlyTab" class="tab-content">
+                <div class="controls">
+                    <label for="monthSelect"><strong>年月選択:</strong></label>
+                    <select id="monthSelect" onchange="updateMonthlyChart()"></select>
+                </div>
+
+                <div class="summary-grid" id="monthlySummary"></div>
+
+                <div class="chart-layout-wrapper">
+                    <div id="monthlyYLeft" class="yaxis-fixed-left"></div>
+                    <div class="chart-scroll-center">
+                        <div id="monthlyChartInner" class="chart-inner-content">
+                            <div id="monthlyChartCenter" style="height: 460px;"></div>
+                        </div>
+                    </div>
+                    <div id="monthlyYRight" class="yaxis-fixed-right"></div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const rawDailyData = __JSON_DAILY_DATA__;
+        const dates = __JSON_DATES__;
+        const rawMonthlyData = __JSON_MONTHLY_DATA__;
+        const months = __JSON_MONTHS__;
+
+        const colors = {
+            gen: '#2ecc71',
+            discharge: '#1e8449',
+            buy: '#e74c3c',
+            cons: '#e67e22',
+            charge: '#3498db',
+            sell: '#8e44ad',
+            soc: '#2c3e50',
+            elevation: '#f39c12',
+            sunshineFill: 'rgba(255, 223, 0, 0.25)',
+            sunshineLine: 'rgba(241, 196, 15, 0.6)'
+        };
+
+        const dailyTickVals = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
+
+        const dateSelect = document.getElementById('dateSelect');
+        dates.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d;
+            opt.textContent = d;
+            dateSelect.appendChild(opt);
+        });
+
+        const monthSelect = document.getElementById('monthSelect');
+        months.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            monthSelect.appendChild(opt);
+        });
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            if (tabName === 'daily') {
+                document.querySelectorAll('.tab-btn')[0].classList.add('active');
+                document.getElementById('dailyTab').classList.add('active');
+                updateDailyChart();
+            } else {
+                document.querySelectorAll('.tab-btn')[1].classList.add('active');
+                document.getElementById('monthlyTab').classList.add('active');
+                updateMonthlyChart();
+            }
+        }
+
+        function renderSummary(containerId, summary) {
+            const el = document.getElementById(containerId);
+            
+            const netPowerSign = summary.net_power > 0 ? '+' : '';
+            const netCostSign = summary.net_cost > 0 ? '+' : '';
+            const netCostClass = summary.net_cost >= 0 ? 'income' : 'cost';
+
+            const buyNote = summary.is_monthly ? `<div class="note">(基本料 ¥${summary.basic_charge.toLocaleString()}込)</div>` : `<div class="note">(eライフ従量計算)</div>`;
+            const netNote = summary.is_monthly ? `<div class="note">(基本料考慮後)</div>` : ``;
+
+            el.innerHTML = `
+                <div class="summary-card">
+                    <div class="label">総発電量</div>
+                    <div class="val" style="color: #2ecc71;">${summary.gen.toLocaleString()} <span style="font-size:0.7rem;">kWh</span></div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">総買電量</div>
+                    <div class="val" style="color: #e74c3c;">${summary.buy.toLocaleString()} <span style="font-size:0.7rem;">kWh</span></div>
+                    <div class="sub-val cost">¥${summary.buy_cost.toLocaleString()}</div>
+                    ${buyNote}
+                </div>
+                <div class="summary-card">
+                    <div class="label">電力自給率</div>
+                    <div class="val" style="color: #27ae60;">${summary.self_ratio}%</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">総消費量</div>
+                    <div class="val" style="color: #e67e22;">${summary.cons.toLocaleString()} <span style="font-size:0.7rem;">kWh</span></div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">総売電量</div>
+                    <div class="val" style="color: #8e44ad;">${summary.sell.toLocaleString()} <span style="font-size:0.7rem;">kWh</span></div>
+                    <div class="sub-val income">¥${summary.sell_income.toLocaleString()}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">電力収支 (売-買)</div>
+                    <div class="val" style="color: #2c3e50;">${netPowerSign}${summary.net_power.toLocaleString()} <span style="font-size:0.7rem;">kWh</span></div>
+                    <div class="sub-val ${netCostClass}">${netCostSign}¥${summary.net_cost.toLocaleString()}</div>
+                    ${netNote}
+                </div>
+            `;
+        }
+
+        function getPowerRange(data) {
+            let maxPos = 0;
+            let maxNeg = 0;
+            for (let i = 0; i < data.time.length; i++) {
+                let posSum = (data.generation[i] || 0) + (data.discharging[i] || 0) + (data.buy[i] || 0);
+                let negSum = Math.abs((data.consumption[i] || 0) + (data.charging[i] || 0) + (data.sell[i] || 0));
+                if (posSum > maxPos) maxPos = posSum;
+                if (negSum > maxNeg) maxNeg = negSum;
+            }
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 3.0) * 1.05 * 10) / 10;
+            return [-limit, limit];
+        }
+
+        function getPowerRangeMonthly(data) {
+            let maxPos = 0;
+            let maxNeg = 0;
+            for (let i = 0; i < data.datetime.length; i++) {
+                let posSum = (data.generation[i] || 0) + (data.discharging[i] || 0) + (data.buy[i] || 0);
+                let negSum = Math.abs((data.consumption[i] || 0) + (data.charging[i] || 0) + (data.sell[i] || 0));
+                if (posSum > maxPos) maxPos = posSum;
+                if (negSum > maxNeg) maxNeg = negSum;
+            }
+            let limit = Math.ceil(Math.max(maxPos, maxNeg, 3.0) * 1.05 * 10) / 10;
+            return [-limit, limit];
+        }
+
+        function updateDailyChart() {
+            const selectedDate = dateSelect.value;
+            const data = rawDailyData[selectedDate];
+            if (!data) return;
+
+            renderSummary('dailySummary', data.summary);
+
+            const yRange = getPowerRange(data);
+
+            Plotly.newPlot('dailyYLeft', [], {
+                margin: { t: 40, r: 0, l: 45, b: 80 },
+                height: 460,
+                yaxis: { title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' },
+                xaxis: { visible: false, fixedrange: true }
+            }, { displayModeBar: false });
+
+            Plotly.newPlot('dailyYRight', [], {
+                margin: { t: 40, r: 45, l: 0, b: 80 },
+                height: 460,
+                yaxis: { title: '蓄電SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false },
+                xaxis: { visible: false, fixedrange: true }
+            }, { displayModeBar: false });
+
+            const customSunshineHover = data.time.map((t, idx) => data.sunshine_pct[idx] !== null ? `${t}<br>日照強度: ${data.sunshine_pct[idx]}%` : `${t}<br>日照強度: -`);
+            const customElevationHover = data.time.map((t, idx) => `${t}<br>受光強度: ${data.elevation_pct[idx]}%`);
+
+            const traces = [
+                {
+                    x: data.time,
+                    y: data.sunshine,
+                    name: '日照強度 (サニーイエロー)',
+                    type: 'scatter',
+                    mode: 'lines',
+                    fill: 'tozeroy',
+                    fillcolor: colors.sunshineFill,
+                    line: { color: colors.sunshineLine, width: 1 },
+                    hovertext: customSunshineHover,
+                    hoverinfo: 'text',
+                    connectgaps: false
+                },
+                { x: data.time, y: data.generation, name: '発電(+)', type: 'bar', marker: { color: colors.gen } },
+                { x: data.time, y: data.discharging, name: '放電(+)', type: 'bar', marker: { color: colors.discharge } },
+                { x: data.time, y: data.buy, name: '買電(+)', type: 'bar', marker: { color: colors.buy } },
+                { x: data.time, y: data.consumption, name: '消費(-)', type: 'bar', marker: { color: colors.cons } },
+                { x: data.time, y: data.charging, name: '充電(-)', type: 'bar', marker: { color: colors.charge } },
+                { x: data.time, y: data.sell, name: '売電(-)', type: 'bar', marker: { color: colors.sell } },
+                { x: data.time, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines+markers', yaxis: 'y2', line: { color: colors.soc, width: 2 }, marker: { size: 4 }, connectgaps: false },
+                { 
+                    x: data.time, 
+                    y: data.elevation, 
+                    name: '受光強度', 
+                    type: 'scatter', 
+                    mode: 'lines', 
+                    line: { color: colors.elevation, width: 2, dash: 'dot' },
+                    hovertext: customElevationHover,
+                    hoverinfo: 'text'
+                }
+            ];
+
+            const layout = {
+                title: selectedDate + ' (30分粒度)',
+                margin: { t: 40, r: 10, l: 10, b: 80 },
+                height: 460,
+                showlegend: false,
+                dragmode: false,
+                xaxis: { 
+                    title: '時刻', 
+                    tickangle: -45, 
+                    tickvals: dailyTickVals,
+                    ticktext: dailyTickVals,
+                    range: ['00:00', '23:30'],
+                    fixedrange: true 
+                },
+                yaxis: { range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true },
+                yaxis2: { range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true },
+                barmode: 'relative',
+                autosize: true
+            };
+
+            Plotly.newPlot('dailyChartCenter', traces, layout, { responsive: true, displayModeBar: false, scrollZoom: false });
+        }
+
+        function updateMonthlyChart() {
+            const selectedMonth = monthSelect.value;
+            const data = rawMonthlyData[selectedMonth];
+            if (!data) return;
+
+            renderSummary('monthlySummary', data.summary);
+
+            const minWidth = Math.max(900, data.datetime.length * 5.625);
+            document.getElementById('monthlyChartInner').style.width = minWidth + 'px';
+
+            const yRange = getPowerRangeMonthly(data);
+
+            Plotly.newPlot('monthlyYLeft', [], {
+                margin: { t: 40, r: 0, l: 45, b: 90 },
+                height: 460,
+                yaxis: { title: '電力量 [kWh]', range: yRange, fixedrange: true, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333' },
+                xaxis: { visible: false, fixedrange: true }
+            }, { displayModeBar: false });
+
+            Plotly.newPlot('monthlyYRight', [], {
+                margin: { t: 40, r: 45, l: 0, b: 90 },
+                height: 460,
+                yaxis: { title: '蓄電SOC [%]', range: [0, 100], side: 'right', fixedrange: true, showgrid: false },
+                xaxis: { visible: false, fixedrange: true }
+            }, { displayModeBar: false });
+
+            const customSunshineHover = data.datetime.map((t, idx) => `${t}<br>日照強度: ${data.sunshine_pct[idx]}%`);
+            const customElevationHover = data.datetime.map((t, idx) => `${t}<br>受光強度: ${data.elevation_pct[idx]}%`);
+
+            const traces = [
+                {
+                    x: data.datetime,
+                    y: data.sunshine,
+                    name: '日照強度 (サニーイエロー)',
+                    type: 'scatter',
+                    mode: 'lines',
+                    fill: 'tozeroy',
+                    fillcolor: colors.sunshineFill,
+                    line: { color: colors.sunshineLine, width: 1 },
+                    hovertext: customSunshineHover,
+                    hoverinfo: 'text'
+                },
+                { x: data.datetime, y: data.generation, name: '発電(+)', type: 'bar', marker: { color: colors.gen } },
+                { x: data.datetime, y: data.discharging, name: '放電(+)', type: 'bar', marker: { color: colors.discharge } },
+                { x: data.datetime, y: data.buy, name: '買電(+)', type: 'bar', marker: { color: colors.buy } },
+                { x: data.datetime, y: data.consumption, name: '消費(-)', type: 'bar', marker: { color: colors.cons } },
+                { x: data.datetime, y: data.charging, name: '充電(-)', type: 'bar', marker: { color: colors.charge } },
+                { x: data.datetime, y: data.sell, name: '売電(-)', type: 'bar', marker: { color: colors.sell } },
+                { x: data.datetime, y: data.soc, name: '蓄電SOC[%]', type: 'scatter', mode: 'lines', yaxis: 'y2', line: { color: colors.soc, width: 1.2 } },
+                { 
+                    x: data.datetime, 
+                    y: data.elevation, 
+                    name: '受光強度', 
+                    type: 'scatter', 
+                    mode: 'lines', 
+                    line: { color: colors.elevation, width: 1.2, dash: 'dot' },
+                    hovertext: customElevationHover,
+                    hoverinfo: 'text'
+                }
+            ];
+
+            const layout = {
+                title: selectedMonth + ' 月間電力バランス (30分刻み)',
+                margin: { t: 40, r: 10, l: 10, b: 90 },
+                height: 460,
+                showlegend: false,
+                dragmode: false,
+                bargap: 0.15,
+                bargroupgap: 0,
+                xaxis: { 
+                    title: '日時 (MM/DD HH:MM)', 
+                    tickangle: -45,
+                    type: 'date',
+                    dtick: 6 * 3600 * 1000,
+                    tickformat: '%m/%d %H:%M',
+                    fixedrange: true
+                },
+                yaxis: { range: yRange, showticklabels: false, zeroline: true, zerolinewidth: 2, zerolinecolor: '#333', fixedrange: true },
+                yaxis2: { range: [0, 100], side: 'right', overlaying: 'y', showticklabels: false, showgrid: false, fixedrange: true },
+                barmode: 'relative'
+            };
+
+            Plotly.newPlot('monthlyChartCenter', traces, layout, { responsive: true, displayModeBar: false, scrollZoom: false });
+        }
+
+        if (dates.length > 0) updateDailyChart();
+    </script>
+</body>
+</html>
+"""
+
+html_content = html_template.replace('__JSON_DAILY_DATA__', json_daily_data) \
+                            .replace('__JSON_DATES__', json_dates) \
+                            .replace('__JSON_MONTHLY_DATA__', json_monthly_data) \
+                            .replace('__JSON_MONTHS__', json_months)
+
+with open('index.html', 'w', encoding='utf-8') as f:
+    f.write(html_content)
+
+print("構文エラーを解消し、朝方の山影積算遅れ補正を組み込んだ index.html を生成しました！")
