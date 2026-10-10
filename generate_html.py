@@ -99,7 +99,6 @@ def get_raw_cos_incidence(dt, lat=LATITUDE, lon=LONGITUDE, tilt=PANEL_TILT_DEG, 
     """パネルへの入射角の余弦 (0.0 〜 1.0) を返す（受光強度は山影でカットせず純粋な太陽位置で計算）"""
     elevation_deg = get_solar_elevation(dt, lat, lon)
     
-    # 太陽高度が地平線以下の場合は受光なし
     if elevation_deg <= 0:
         return 0.0
     else:
@@ -206,18 +205,29 @@ else:
 # 生の受光係数 (0.0 〜 1.0)
 df['raw_受光係数'] = df['日時'].apply(get_raw_cos_incidence)
 
-def apply_mountain_sunshine_correction(row):
+# 理論上の日照可能時間（受光ポテンシャル）に基づく晴天率・積算遅れ補正ロジック
+def apply_theoretical_clearness_correction(row):
     raw_sun = row['raw_日照強度']
-    dt = row['日時']
-    elevation = get_solar_elevation(dt)
+    raw_coef = row['raw_受光係数']
+    elevation = get_solar_elevation(row['日時'])
     
-    if elevation <= MOUNTAIN_ELEVATION_THRESHOLD_DEG and elevation > 0:
-        effective_sun = max(raw_sun, row['raw_受光係数'] * 100.0 * 0.8)
+    # 地平線以下なら 0
+    if elevation <= 0:
+        return 0.0
+        
+    # 朝方の山影帯において、アメダスの1時間積算ラグで値が過小評価されている場合、
+    # 理論上の受光ポテンシャル（raw_coef）を分母・基準とした晴天率ベースで補正する
+    # ※受光係数がしっかり立ち上がっている（光が当たっている）時間帯なのにアメダスが低い場合、
+    #  その日の天候に応じたポテンシャルまで日照強度を持ち上げる
+    if raw_coef > 0.05:
+        # 理論上の受光係数カーブに連動した下限フロアを設けて積算遅れを相殺
+        effective_sun = max(raw_sun, raw_coef * 100.0)
         return effective_sun
+        
     return raw_sun
 
 if 'raw_日照強度' in df.columns:
-    df['補正日照強度_%'] = df.apply(apply_mountain_sunshine_correction, axis=1)
+    df['補正日照強度_%'] = df.apply(apply_theoretical_clearness_correction, axis=1)
 else:
     df['補正日照強度_%'] = 0.0
 
@@ -911,4 +921,4 @@ html_content = html_template.replace('__JSON_DAILY_DATA__', json_daily_data) \
 with open('index.html', 'w', encoding='utf-8') as f:
     f.write(html_content)
 
-print("構文エラーを解消し、朝方の山影積算遅れ補正を組み込んだ index.html を生成しました！")
+print("理論上の受光ポテンシャル基準の晴天率補正ロジックを組み込んだ index.html を生成しました！")
